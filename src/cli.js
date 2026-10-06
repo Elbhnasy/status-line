@@ -18,9 +18,9 @@ const USAGE = `Usage: status-line <cli> [--dry-run]     install the existing sta
 Supported CLIs: ${NAMES.join(', ')}
 
 Examples:
-  npx github:Elbhnasy/status-line all
-  npx github:Elbhnasy/status-line claude
-  npx github:Elbhnasy/status-line agy --dry-run
+  npx @elbhnasy/status-line all
+  npx @elbhnasy/status-line claude
+  npx @elbhnasy/status-line agy --dry-run
 `;
 
 function suggest(input) {

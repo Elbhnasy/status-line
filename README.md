@@ -6,10 +6,10 @@ usage bar for Agy, which had none.
 
 ## Install on any device
 
-You need Node.js 18+ and git. Nothing has to be cloned or published first:
+You need Node.js 18+:
 
 ```bash
-npx github:Elbhnasy/status-line all
+npx @elbhnasy/status-line all
 ```
 
 `all` installs the statusline for every supported CLI it finds on the device (Claude Code, agy,
@@ -18,17 +18,16 @@ Hermes, OpenCode) and skips the ones that aren't installed. Restart those CLIs a
 To install for a single CLI:
 
 ```bash
-npx github:Elbhnasy/status-line claude
-npx github:Elbhnasy/status-line agy
-npx github:Elbhnasy/status-line hermes
-npx github:Elbhnasy/status-line opencode
+npx @elbhnasy/status-line claude
+npx @elbhnasy/status-line agy
+npx @elbhnasy/status-line hermes
+npx @elbhnasy/status-line opencode
 ```
 
 Add `--dry-run` to see what would change, or `--uninstall` to revert, e.g.
-`npx github:Elbhnasy/status-line all --uninstall`. `list` shows each CLI's mechanism, and
-`--help` prints usage.
-
-Once the package is published to npm, `npx @elbhnasy/status-line all` will work the same way.
+`npx @elbhnasy/status-line all --uninstall`. `list` shows each CLI's mechanism, and `--help`
+prints usage. Running straight from GitHub also works (needs git):
+`npx github:Elbhnasy/status-line all`.
 
 ## What each command installs
 
