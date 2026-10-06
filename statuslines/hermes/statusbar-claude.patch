@@ -1,0 +1,530 @@
+diff --git a/hermes_cli/cli_status_bar_mixin.py b/hermes_cli/cli_status_bar_mixin.py
+index 47dac228a27c617fa99c4563d973e14d30fcaad8..dda8afc1adcd8041e4ec5009616856a4b20c18bf 100644
+--- a/hermes_cli/cli_status_bar_mixin.py
++++ b/hermes_cli/cli_status_bar_mixin.py
+@@ -8,6 +8,7 @@ inside each method (``from cli import ...``) — never at module load time (impo
+ from __future__ import annotations
+ 
+ import errno
++import os
+ import shutil
+ import threading
+ import time
+@@ -231,6 +232,8 @@ class CLIStatusBarMixin:
+             "battery_category": "dim",
+             "focus_label": "",  # /focus badge: the reduced-output mode is never invisible.
+             "git_branch": "",
++            "cwd_label": "",      # claude style only
++            "effort_label": "",   # claude style only
+             "goal_active": False,
+             "goal_turns_used": 0,
+             "goal_max_turns": 0}
+@@ -254,6 +257,17 @@ class CLIStatusBarMixin:
+         except Exception:
+             pass
+ 
++        # Claude-style bar (display.status_bar.style: claude) needs two extra labels. Gated on
++        # the style so the default layout pays nothing for them.
++        if self._get_status_bar_style() == "claude":
++            try:
++                from hermes_cli.status_bar_claude import cwd_label, effort_label
++
++                snapshot["cwd_label"] = cwd_label(os.getcwd())
++                snapshot["effort_label"] = effort_label(getattr(self, "reasoning_config", None))
++            except Exception:
++                pass
++
+         # Battery reads are memoised inside agent.battery, so per-repaint polling is cheap.
+         if getattr(self, "_battery_visible", False):
+             try:
+@@ -1015,6 +1029,33 @@ class CLIStatusBarMixin:
+         self._status_bar_field_set_cache = result
+         return result
+ 
++    def _get_status_bar_options(self) -> tuple:
++        """``(style, usage_budget)`` from ``display.status_bar`` (module-level ``CLI_CONFIG``;
++        no per-render YAML parse). ``style``: ``"default"`` | ``"claude"`` (case-insensitive).
++        ``usage_budget``: session token budget behind the claude bar's ``usage:`` segment,
++        ``0`` disables it; defaults to 1_000_000."""
++        from cli import CLI_CONFIG
++        if hasattr(self, "_status_bar_options_cache"):
++            return self._status_bar_options_cache
++        style, budget = "default", 1_000_000
++        try:
++            display = CLI_CONFIG.get("display") if isinstance(CLI_CONFIG, dict) else None
++            status_bar = (display or {}).get("status_bar") if isinstance(display, dict) else None
++            if isinstance(status_bar, dict):
++                raw_style = status_bar.get("style")
++                if isinstance(raw_style, str) and raw_style.strip().lower() == "claude":
++                    style = "claude"
++                raw_budget = status_bar.get("usage_budget")
++                if isinstance(raw_budget, (int, float)) and not isinstance(raw_budget, bool):
++                    budget = int(raw_budget)
++        except Exception:
++            style, budget = "default", 1_000_000
++        self._status_bar_options_cache = (style, budget)
++        return self._status_bar_options_cache
++
++    def _get_status_bar_style(self) -> str:
++        return self._get_status_bar_options()[0]
++
+     def _status_bar_segments(
+         self, snapshot, width: int, field_set, yolo_active: bool, *, styled: bool) -> list:
+         """Ordered status-bar segments for one width tier (<52 / <76 / wide), each a list of
+@@ -1106,12 +1147,77 @@ class CLIStatusBarMixin:
+                 segs.append([(_DIM, f"Σ{format_token_count_compact(total_tokens)}")])
+         return segs
+ 
++    def _claude_status_bar_segments(self, snapshot: dict, width: int) -> list:
++        """Claude-Code layout: ``dir │ model │ effort │ context: bar % │ usage: bar % (dur)``.
++
++        Built from the same snapshot and skin style classes as the default renderer, so colours
++        follow the active skin. Segments the terminal cannot fit are given up in
++        ``status_bar_claude.DROP_ORDER`` (dir, then effort, then usage); ``model`` and
++        ``context`` always stay, and the callers trim as a last resort.
++        """
++        from hermes_cli.status_bar_claude import (
++            DROP_ORDER, SEGMENT_ORDER, render_bar, round_half_up, usage_percent)
++
++        def _pct(value) -> str:
++            return "--" if value is None else f"{round_half_up(value)}%"
++
++        def _bar_segment(label_key: str, pct, style: str) -> list:
++            return [(_DIM, f"{t(label_key)} "), (style, render_bar(pct)),
++                    (_DIM, " "), (style, _pct(pct))]
++
++        model_short = snapshot["model_short"]
++        duration_label = snapshot["duration"]
++        ctx_pct = snapshot.get("context_percent")
++        ctx_style = self._status_bar_context_style(ctx_pct)
++        usage_pct = usage_percent(
++            snapshot.get("session_total_tokens", 0), self._get_status_bar_options()[1])
++
++        available = {
++            "dir": [(_DIM, snapshot.get("cwd_label") or "")],
++            "model": [(_STRONG, model_short)],
++            "effort": [(_DIM, snapshot.get("effort_label") or "")],
++            "context": _bar_segment("cli.status_bar.ctx_label", ctx_pct, ctx_style),
++        }
++        if usage_pct is not None:
++            usage_seg = _bar_segment(
++                "cli.status_bar.usage_label", usage_pct,
++                self._status_bar_context_style(round_half_up(usage_pct)))
++            usage_seg.append((_DIM, f" ({duration_label})"))
++            available["usage"] = usage_seg
++
++        # Requirement: ``model`` and ``context`` are never dropped by the builder, so they
++        # (and ``usage``, already gated on data) are chosen by presence alone; only the
++        # conditional ``dir``/``effort`` labels are pruned when empty.
++        _EMPTY_PRUNE = ("dir", "effort")
++        keep = [name for name in SEGMENT_ORDER if available.get(name)
++                and (name not in _EMPTY_PRUNE
++                     or all(text for _style, text in available[name]))]
++
++        def _total() -> int:
++            return (sum(self._status_bar_display_width(text)
++                        for name in keep for _style, text in available[name])
++                    + 3 * max(0, len(keep) - 1))
++
++        for name in DROP_ORDER:
++            if _total() <= width:
++                break
++            if name in keep:
++                keep.remove(name)
++        return [available[name] for name in SEGMENT_ORDER if name in keep]
++
+     def _build_status_bar_text(self, width: Optional[int] = None) -> str:
+         """Compact one-line session status string for the TUI footer."""
+         try:
+             snapshot = self._get_status_bar_snapshot()
+             if width is None:
+                 width = self._get_tui_terminal_width()
++            if self._get_status_bar_style() == "claude":
++                segs = self._claude_status_bar_segments(snapshot, width)
++                text = " │ ".join(
++                    "".join(part for _style, part in seg) for seg in segs)
++                if self._status_bar_display_width(text) > width:
++                    text = self._trim_status_bar_text(text, width)
++                return text
+             model_short = snapshot["model_short"]
+             battery_label = snapshot.get("battery_label") or ""
+             field_set = self._get_status_bar_field_set()
+@@ -1144,6 +1250,19 @@ class CLIStatusBarMixin:
+             width = self._get_tui_terminal_width()
+             field_set = self._get_status_bar_field_set()
+ 
++            if self._get_status_bar_style() == "claude":
++                sep = " │ "
++                frags: list = []
++                for seg in self._claude_status_bar_segments(snapshot, width):
++                    if frags:
++                        frags.append((_DIM, sep))
++                    frags.extend(seg)
++                frags.append((_SB, " "))
++                if sum(self._status_bar_display_width(part) for _s, part in frags) > width:
++                    plain = "".join(part for _s, part in frags)
++                    return [(_SB, self._trim_status_bar_text(plain, width))]
++                return frags
++
+             def _ok(name: str) -> bool:
+                 return field_set is None or name in field_set
+ 
+diff --git a/hermes_cli/config_defaults.py b/hermes_cli/config_defaults.py
+index 7f4db9e3b9dd82456c7bd24b105564b7c0cdf5b7..f65c260928b9098425a91c6c0514cca90f92bf76 100644
+--- a/hermes_cli/config_defaults.py
++++ b/hermes_cli/config_defaults.py
+@@ -983,6 +983,14 @@ DEFAULT_CONFIG = {
+         # context_detail/prompt_elapsed/idle_since.
+         "status_bar": {
+             "fields": [],
++            # Layout: "default" (the field-list renderer above, `fields` decides visibility) |
++            # "claude" (fixed Claude-Code layout: dir │ model │ effort │ context: bar % │
++            # usage: bar % (duration)); "claude" ignores `fields` and drops segments it cannot
++            # fit, in the order dir -> effort -> usage.
++            "style": "default",
++            # Session token budget behind the claude layout's `usage:` bar (session Σ tokens
++            # / budget). 0 hides that segment.
++            "usage_budget": 1000000,
+         },
+         "copy_shortcut": "auto",  # "auto" (platform default) | ctrl_c | ctrl_shift_c | disabled
+         # Petdex animated mascot (github.com/crafter-station/petdex): cosmetic sprite across
+diff --git a/locales/en.yaml b/locales/en.yaml
+index dbb8972a633c6b8edbffe1f1d8e0f6b261631a4f..32a11dc4b2e0700feea1ca788dfc0ebec0ff43d0 100644
+--- a/locales/en.yaml
++++ b/locales/en.yaml
+@@ -2656,6 +2656,8 @@ cli:
+     goal: "⊙ goal"
+     ctx_pinned: " pinned"
+     ctx_unknown: "ctx --"
++    ctx_label: "context:"
++    usage_label: "usage:"
+     yolo_badge: "⚠ YOLO"
+     stash_header_one: "📌 Stash ({count} item)"
+     stash_header_other: "📌 Stash ({count} items)"
+diff --git a/tests/hermes_cli/test_cli_status_bar.py b/tests/hermes_cli/test_cli_status_bar.py
+index 738f3c0c436e4f2f410df82fd28d2a0922794b45..511b4b84d1088996335f68b52137e5058f2bcf94 100644
+--- a/tests/hermes_cli/test_cli_status_bar.py
++++ b/tests/hermes_cli/test_cli_status_bar.py
+@@ -522,3 +522,128 @@ class TestCacheHitBaselineReset:
+         with patch.object(cli_mod, "CLI_CONFIG", {"display": {"status_bar": {"fields": ["model", "duration"]}}}):
+             text = cli_obj._build_status_bar_text(width=80)
+         assert "weekly-digest" not in text
++
++
++class TestStatusBarStyleOptions:
++    """display.status_bar.style / usage_budget plumbing (#statusbar-claude)."""
++
++    def test_style_defaults_to_default_and_reads_claude(self, monkeypatch, tmp_path):
++        cli_obj = _make_cli()
++        with patch.object(cli_mod, "CLI_CONFIG", {"display": {"status_bar": {}}}):
++            assert cli_obj._get_status_bar_style() == "default"
++
++        cli_obj = _make_cli()
++        with patch.object(cli_mod, "CLI_CONFIG",
++                          {"display": {"status_bar": {"style": "Claude", "usage_budget": 5000}}}):
++            assert cli_obj._get_status_bar_style() == "claude"
++            assert cli_obj._get_status_bar_options()[1] == 5000
++
++    def test_snapshot_gains_dir_and_effort_only_in_claude_style(self, monkeypatch, tmp_path):
++        repo = tmp_path / "example-workspace"
++        repo.mkdir()
++        monkeypatch.chdir(repo)
++
++        cli_obj = _make_cli()
++        cli_obj.reasoning_config = {"enabled": True, "effort": "high"}
++        with patch.object(cli_mod, "CLI_CONFIG", {"display": {"status_bar": {"style": "default"}}}):
++            default_snap = cli_obj._get_status_bar_snapshot()
++        assert default_snap["cwd_label"] == "" and default_snap["effort_label"] == ""
++
++        cli_obj = _make_cli()
++        cli_obj.reasoning_config = {"enabled": True, "effort": "high"}
++        with patch.object(cli_mod, "CLI_CONFIG", {"display": {"status_bar": {"style": "claude"}}}):
++            claude_snap = cli_obj._get_status_bar_snapshot()
++        assert claude_snap["cwd_label"] == "example-workspace"
++        assert claude_snap["effort_label"] == "high"
++
++
++class TestClaudeStyleStatusBar:
++    """display.status_bar.style: claude — layout parity with a Claude Code status line."""
++
++    def _cli(self, monkeypatch, tmp_path, **kwargs):
++        cli_obj = _attach_agent(_make_cli(), **kwargs)
++        repo = tmp_path / "example-workspace"
++        repo.mkdir(exist_ok=True)
++        monkeypatch.chdir(repo)
++        cli_obj.reasoning_config = {"enabled": True, "effort": "high"}
++        return cli_obj
++
++    @staticmethod
++    def _config(style="claude", budget=1_000_000):
++        return {"display": {"status_bar": {"style": style, "usage_budget": budget}}}
++
++    def _text(self, cli_obj, width, **cfg_kwargs):
++        with patch.object(cli_mod, "CLI_CONFIG", self._config(**cfg_kwargs)):
++            return cli_obj._build_status_bar_text(width=width)
++
++    def _fixture(self, monkeypatch, tmp_path, **overrides):
++        kwargs = dict(prompt_tokens=10_000, completion_tokens=2_000, total_tokens=790_000,
++                      api_calls=5, context_tokens=16_000, context_length=200_000)
++        kwargs.update(overrides)
++        return self._cli(monkeypatch, tmp_path, **kwargs)
++
++    def test_wide_layout_is_exactly_the_claude_shape(self, monkeypatch, tmp_path):
++        cli_obj = self._fixture(monkeypatch, tmp_path)
++        assert self._text(cli_obj, 120) == (
++            "example-workspace │ claude-sonnet-4-20250514 │ high │ "
++            "context: \u2588\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591 8% │ "
++            "usage: \u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2591\u2591 79% (15m)"
++        )
++
++    def test_segments_drop_dir_then_effort_then_usage_as_width_shrinks(self, monkeypatch, tmp_path):
++        assert self._text(self._fixture(monkeypatch, tmp_path), 100) == (
++            "claude-sonnet-4-20250514 │ high │ context: "
++            "\u2588\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591 8% │ "
++            "usage: \u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2591\u2591 79% (15m)"
++        )
++        assert self._text(self._fixture(monkeypatch, tmp_path), 80) == (
++            "claude-sonnet-4-20250514 │ context: "
++            "\u2588\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591 8% │ "
++            "usage: \u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2591\u2591 79% (15m)"
++        )
++        assert self._text(self._fixture(monkeypatch, tmp_path), 60) == (
++            "claude-sonnet-4-20250514 │ context: "
++            "\u2588\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591 8%"
++        )
++
++    def test_zero_budget_hides_the_usage_segment(self, monkeypatch, tmp_path):
++        text = self._text(self._fixture(monkeypatch, tmp_path), 120, budget=0)
++        assert "usage:" not in text
++        assert "context:" in text
++
++    def test_default_style_is_untouched(self, monkeypatch, tmp_path):
++        text = self._text(self._fixture(monkeypatch, tmp_path), 120, style="default")
++        assert "16K/200K" in text            # legacy context_detail segment
++        assert "context:" not in text
++        assert "example-workspace" not in text
++
++    def test_long_line_is_trimmed_not_wrapped(self, monkeypatch, tmp_path):
++        text = self._text(self._fixture(monkeypatch, tmp_path), 40)
++        assert cli_obj_width(cli_mod, text) <= 40
++
++
++def cli_obj_width(_mod, text):
++    from prompt_toolkit.utils import get_cwidth
++    return get_cwidth(text)
++
++
++class TestClaudeStyleFragments:
++    def test_fragments_render_claude_segments_within_width(self, monkeypatch, tmp_path):
++        cli_obj = _attach_agent(
++            _make_cli(), prompt_tokens=10_000, completion_tokens=2_000, total_tokens=790_000,
++            api_calls=5, context_tokens=16_000, context_length=200_000)
++        cli_obj._status_bar_visible = True
++        repo = tmp_path / "example-workspace"
++        repo.mkdir()
++        monkeypatch.chdir(repo)
++        cli_obj.reasoning_config = {"enabled": True, "effort": "high"}
++
++        with patch.object(cli_mod, "CLI_CONFIG",
++                          {"display": {"status_bar": {"style": "claude"}}}), \
++                patch.object(cli_obj, "_get_tui_terminal_width", return_value=120):
++            frags = cli_obj._get_status_bar_fragments()
++
++        text = "".join(value for _style, value in frags)
++        assert "example-workspace" in text
++        assert "context: " in text and "usage: " in text
++        assert cli_obj._status_bar_display_width(text) <= 120
+diff --git a/hermes_cli/status_bar_claude.py b/hermes_cli/status_bar_claude.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..a32ea00589d1b39205740685ba840e5c5f015603
+--- /dev/null
++++ b/hermes_cli/status_bar_claude.py
+@@ -0,0 +1,113 @@
++"""Pure helpers for the Claude-Code-style status bar (``display.status_bar.style: claude``).
++
++The layout implemented by ``cli_status_bar_mixin._claude_status_bar_segments`` is::
++
++    <dir> │ <model> │ <effort> │ context: <bar> <pct>% │ usage: <bar> <pct>% (<duration>)
++
++Only pure functions and constants live here (no ``self``, no prompt_toolkit) so the layout math
++is unit testable without a live ``HermesCLI`` — same split as ``hermes_cli/status_bar_git.py``.
++"""
++
++from __future__ import annotations
++
++import math
++import os
++from typing import Optional
++
++#: Cell count of both Claude-Code bars (context and usage).
++BAR_WIDTH = 10
++FILLED = "\u2588"   # █
++EMPTY = "\u2591"    # ░
++ELLIPSIS = "\u2026"  # …
++
++#: Documented default when ``agent.reasoning_effort`` is unset — "medium", see
++#: ``batch_runner.py`` help text and ``hermes_constants.parse_reasoning_effort``.
++DEFAULT_EFFORT = "medium"
++
++#: Longest directory label before middle-truncation kicks in.
++MAX_DIR_CHARS = 24
++
++#: Render order of the five fragments (Claude Code's order).
++SEGMENT_ORDER = ("dir", "model", "effort", "context", "usage")
++
++#: Segments given up, least important first, when the line is wider than the terminal.
++#: ``model`` and ``context`` are never dropped.
++DROP_ORDER = ("dir", "effort", "usage")
++
++
++def _clamp_percent(percent) -> Optional[float]:
++    if percent is None or isinstance(percent, bool):
++        return None
++    try:
++        value = float(percent)
++    except (TypeError, ValueError):
++        return None
++    if value != value:  # NaN
++        return None
++    return max(0.0, min(100.0, value))
++
++
++def round_half_up(value) -> int:
++    """Nearest integer, halves rounding up — the rule ``render_bar`` fills with. Deliberately
++    not the built-in ``round``, whose banker's rounding makes 5% fill 0 cells."""
++    return math.floor(float(value) + 0.5)
++
++
++def render_bar(percent, width: int = BAR_WIDTH) -> str:
++    """Ten-cell ``█``/``░`` bar with no brackets — Claude Code's look.
++
++    ``None`` (no data yet) renders all-empty rather than a misleading empty/full bar. Fill
++    rounds half-up to the nearest cell (see ``round_half_up``; Python's built-in
++    ``round`` is banker's rounding, so ``5%`` would otherwise show 0 cells) and clamps to
++    ``0..width``.
++    """
++    safe = _clamp_percent(percent)
++    filled = 0 if safe is None else round_half_up(safe / 100.0 * width)
++    filled = max(0, min(width, filled))
++    return FILLED * filled + EMPTY * (width - filled)
++
++
++def usage_percent(total_tokens, budget) -> Optional[float]:
++    """Session token total as a percentage of ``budget``; ``None`` when the segment is off.
++
++    ``budget <= 0`` disables the ``usage:`` segment. Totals above the budget clamp to 100.
++    """
++    if isinstance(budget, bool):
++        return None
++    try:
++        budget = int(budget)
++    except (TypeError, ValueError):
++        return None
++    if budget <= 0:
++        return None
++    try:
++        total = max(0, int(total_tokens or 0))
++    except (TypeError, ValueError):
++        total = 0
++    return min(100.0, total / budget * 100.0)
++
++
++def cwd_label(path) -> str:
++    """Basename of the session working directory, middle-truncated to ``MAX_DIR_CHARS``."""
++    raw = os.path.basename(os.path.normpath(str(path or "")))
++    if raw in ("", "."):
++        return ""
++    if len(raw) <= MAX_DIR_CHARS:
++        return raw
++    head = MAX_DIR_CHARS // 2
++    tail = MAX_DIR_CHARS - head - 1
++    return f"{raw[:head]}{ELLIPSIS}{raw[-tail:]}"
++
++
++def effort_label(reasoning_config, default: str = DEFAULT_EFFORT) -> str:
++    """Short effort word for the bar: the requested level, ``off`` when thinking is disabled.
++
++    Deliberately the *requested* level (``requested_effort``), not
++    ``effort_display_label``'s ``"ultra (sends max on this route)"`` — that route-clamp detail
++    belongs in ``/reasoning`` status, not a one-line bar.
++    """
++    from agent.reasoning_effort import requested_effort
++
++    if isinstance(reasoning_config, dict) and reasoning_config.get("enabled") is False:
++        return "off"
++    return requested_effort(reasoning_config) or default
+diff --git a/tests/hermes_cli/test_status_bar_claude.py b/tests/hermes_cli/test_status_bar_claude.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..6a5cbeb696b7fd57f8cbe0478298f5f91f1d298b
+--- /dev/null
++++ b/tests/hermes_cli/test_status_bar_claude.py
+@@ -0,0 +1,69 @@
++"""Unit tests for the pure Claude-style status-bar helpers (no live HermesCLI)."""
++
++import pytest
++
++from hermes_cli import status_bar_claude as sb
++
++
++@pytest.mark.parametrize("pct,expected", [
++    (None, "\u2591" * 10),          # no data yet -> all empty, never a fake full/zero bar
++    (0, "\u2591" * 10),
++    (5, "\u2588" + "\u2591" * 9),   # 0.5 rounds half-up -> 1 cell
++    (8, "\u2588" + "\u2591" * 9),   # round(0.8) = 1
++    (50, "\u2588" * 5 + "\u2591" * 5),
++    (79, "\u2588" * 8 + "\u2591" * 2),
++    (100, "\u2588" * 10),
++    (-5, "\u2591" * 10),
++    (150, "\u2588" * 10),
++])
++def test_render_bar(pct, expected):
++    assert sb.render_bar(pct) == expected
++
++
++def test_render_bar_width_override():
++    assert sb.render_bar(50, width=4) == "\u2588\u2588\u2591\u2591"
++
++
++def test_usage_percent_disables_and_clamps():
++    assert sb.usage_percent(10, 0) is None       # budget 0 hides the segment
++    assert sb.usage_percent(10, -1) is None
++    assert sb.usage_percent(0, 1_000_000) == 0.0
++    assert sb.usage_percent(790_000, 1_000_000) == 79.0
++    assert sb.usage_percent(2_000_000, 1_000_000) == 100.0
++    assert sb.usage_percent(None, 1_000_000) == 0.0
++
++
++def test_cwd_label_is_basename_and_truncates():
++    assert sb.cwd_label("projects/example-workspace") == "example-workspace"
++    assert sb.cwd_label("/") == ""
++    assert sb.cwd_label("") == ""
++    long = sb.cwd_label("/x/" + "a" * 40)
++    assert len(long) == sb.MAX_DIR_CHARS and "\u2026" in long
++
++
++def test_effort_label():
++    assert sb.effort_label(None) == "medium"          # unset -> documented default
++    assert sb.effort_label({"enabled": True, "effort": "high"}) == "high"
++    assert sb.effort_label({"enabled": False, "effort": "high"}) == "off"
++    assert sb.effort_label({"enabled": True, "effort": ""}) == "medium"
++
++
++def test_layout_order_constants():
++    # Rendering order is Claude's; drop order is least-important-first.
++    assert sb.SEGMENT_ORDER == ("dir", "model", "effort", "context", "usage")
++    assert sb.DROP_ORDER == ("dir", "effort", "usage")
++
++
++def test_default_config_documents_the_style_and_budget():
++    from hermes_cli.config_defaults import DEFAULT_CONFIG
++
++    status_bar = DEFAULT_CONFIG["display"]["status_bar"]
++    assert status_bar["style"] == "default"
++    assert status_bar["usage_budget"] == 1_000_000
++
++
++def test_labels_exist_in_the_english_catalog():
++    from agent.i18n import t
++
++    assert t("cli.status_bar.ctx_label", lang="en") == "context:"
++    assert t("cli.status_bar.usage_label", lang="en") == "usage:"

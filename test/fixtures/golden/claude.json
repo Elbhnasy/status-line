@@ -1,0 +1,23 @@
+{
+  "full-with-rate-limits": "my-project │ Opus 5.5 │ \u001b[2mhigh\u001b[0m │ context: \u001b[32m███░░░░░░░ 30%\u001b[0m │ usage: \u001b[32m████░░░░░░ 42%\u001b[0m\u001b[2m (2h14m)\u001b[0m",
+  "usage-60": "my-project │ Opus 5.5 │ \u001b[2mhigh\u001b[0m │ context: \u001b[32m███░░░░░░░ 30%\u001b[0m │ usage: \u001b[33m██████░░░░ 60%\u001b[0m\u001b[2m (30m)\u001b[0m",
+  "usage-80": "my-project │ Opus 5.5 │ \u001b[2mhigh\u001b[0m │ context: \u001b[32m███░░░░░░░ 30%\u001b[0m │ usage: \u001b[38;5;208m████████░░ 80%\u001b[0m\u001b[2m (4h0m)\u001b[0m",
+  "usage-95": "my-project │ Opus 5.5 │ \u001b[2mhigh\u001b[0m │ context: \u001b[32m███░░░░░░░ 30%\u001b[0m │ usage: \u001b[31m██████████ 95%\u001b[0m\u001b[2m (5m)\u001b[0m",
+  "no-rate-limits-no-creds": "my-project │ Opus 5.5 │ \u001b[2mhigh\u001b[0m │ context: \u001b[32m███░░░░░░░ 30%\u001b[0m",
+  "context-45": "my-project │ Opus 5.5 │ \u001b[2mhigh\u001b[0m │ context: \u001b[32m████░░░░░░ 45%\u001b[0m",
+  "context-55": "my-project │ Opus 5.5 │ \u001b[2mhigh\u001b[0m │ context: \u001b[33m█████░░░░░ 55%\u001b[0m",
+  "context-70": "my-project │ Opus 5.5 │ \u001b[2mhigh\u001b[0m │ context: \u001b[38;5;208m███████░░░ 70%\u001b[0m",
+  "context-85": "my-project │ Opus 5.5 │ \u001b[2mhigh\u001b[0m │ context: \u001b[5m\u001b[31m💀 ████████░░ 85%\u001b[0m",
+  "context-missing": "my-project │ Opus 5.5 │ \u001b[2mhigh\u001b[0m │ context: \u001b[32m░░░░░░░░░░ 0%\u001b[0m",
+  "no-effort": "my-project │ Opus 5.5 │ context: \u001b[32m███░░░░░░░ 30%\u001b[0m",
+  "effort-from-env": "my-project │ Opus 5.5 │ \u001b[2mlow\u001b[0m │ context: \u001b[32m███░░░░░░░ 30%\u001b[0m",
+  "effort-from-settings": "my-project │ Opus 5.5 │ \u001b[2mmax\u001b[0m │ context: \u001b[32m███░░░░░░░ 30%\u001b[0m",
+  "current-task": "my-project │ Opus 5.5 │ \u001b[2mhigh\u001b[0m │ context: \u001b[32m███░░░░░░░ 30%\u001b[0m │ \u001b[2mRunning tests\u001b[0m",
+  "fresh-cache": "my-project │ Opus 5.5 │ \u001b[2mhigh\u001b[0m │ context: \u001b[32m███░░░░░░░ 30%\u001b[0m │ usage: \u001b[32m███░░░░░░░ 33%\u001b[0m\u001b[2m (1h0m)\u001b[0m",
+  "stale-cache-backoff": "my-project │ Opus 5.5 │ \u001b[2mhigh\u001b[0m │ context: \u001b[32m███░░░░░░░ 30%\u001b[0m │ usage: \u001b[2m██████░░░░ 63% (3h0m) · 10m ago\u001b[0m",
+  "expired-cache-window": "my-project │ Opus 5.5 │ \u001b[2mhigh\u001b[0m │ context: \u001b[32m███░░░░░░░ 30%\u001b[0m",
+  "api-key-with-rate-limits": "my-project │ Opus 5.5 │ \u001b[2mhigh\u001b[0m │ context: \u001b[32m███░░░░░░░ 30%\u001b[0m │ usage: \u001b[32m████░░░░░░ 42%\u001b[0m\u001b[2m (1h0m)\u001b[0m",
+  "api-key-no-rate-limits": "my-project │ Opus 5.5 │ \u001b[2mhigh\u001b[0m │ context: \u001b[32m███░░░░░░░ 30%\u001b[0m",
+  "empty-stdin": "~ │ Claude │ context: \u001b[32m░░░░░░░░░░ 0%\u001b[0m",
+  "malformed-json": "~ │ Claude │ context: \u001b[32m░░░░░░░░░░ 0%\u001b[0m"
+}

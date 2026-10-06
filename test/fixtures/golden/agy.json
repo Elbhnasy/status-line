@@ -1,0 +1,13 @@
+{
+  "gemini-full": "my-project │ Gemini 3.8 Flash (High) │ context: \u001b[32m███░░░░░░░ 30%\u001b[0m",
+  "claude-model": "my-project │ Claude Opus 4.6 (Thinking) │ context: \u001b[32m███░░░░░░░ 30%\u001b[0m",
+  "gpt-model": "my-project │ GPT-OSS 120B (Medium) │ context: \u001b[32m███░░░░░░░ 30%\u001b[0m",
+  "context-55": "my-project │ Gemini 3.8 Flash (High) │ context: \u001b[33m█████░░░░░ 55%\u001b[0m",
+  "context-70": "my-project │ Gemini 3.8 Flash (High) │ context: \u001b[38;5;208m███████░░░ 70%\u001b[0m",
+  "context-85": "my-project │ Gemini 3.8 Flash (High) │ context: \u001b[5m\u001b[31m💀 ████████░░ 85%\u001b[0m",
+  "context-size-zero": "my-project │ Gemini 3.8 Flash (High) │ context: \u001b[32m░░░░░░░░░░ 0%\u001b[0m",
+  "context-missing": "my-project │ Gemini 3.8 Flash (High) │ context: \u001b[32m░░░░░░░░░░ 0%\u001b[0m",
+  "extra-fields": "my-project │ Gemini 3.8 Flash (High) │ context: \u001b[32m███░░░░░░░ 30%\u001b[0m",
+  "empty-stdin": "~ │ Claude │ context: \u001b[32m░░░░░░░░░░ 0%\u001b[0m",
+  "malformed-json": "~ │ Claude │ context: \u001b[32m░░░░░░░░░░ 0%\u001b[0m"
+}
