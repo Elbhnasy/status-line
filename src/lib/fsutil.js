@@ -57,6 +57,12 @@ function writeJsonFile(file, data, { indent = 2, newline = true } = {}) {
   atomicWrite(file, JSON.stringify(data, null, indent) + (newline ? '\n' : ''));
 }
 
+// `node <script>` for a CLI's statusLine command. Quoted only when the path has whitespace
+// (e.g. C:\Users\John Doe), so plain paths keep the exact command already in use.
+function nodeCommand(script) {
+  return /\s/.test(script) ? `node "${script}"` : `node ${script}`;
+}
+
 function deepEqual(a, b) {
   return JSON.stringify(a) === JSON.stringify(b);
 }
@@ -66,4 +72,4 @@ function tildify(p) {
   return p === home || p.startsWith(home + path.sep) ? '~' + p.slice(home.length) : p;
 }
 
-module.exports = { exists, sha256, atomicWrite, backupFile, readJsonFile, writeJsonFile, deepEqual, tildify };
+module.exports = { exists, sha256, atomicWrite, backupFile, readJsonFile, writeJsonFile, nodeCommand, deepEqual, tildify };

@@ -4,15 +4,31 @@ One package for my existing statuslines across CLI agents. Each CLI gets the sta
 use, installed the way that CLI loads it. Nothing is redesigned; the only behavior change is a
 usage bar for Agy, which had none.
 
+## Install on any device
+
+You need Node.js 18+ and git. Nothing has to be cloned or published first:
+
 ```bash
-npx @elbhnasy/status-line claude
-npx @elbhnasy/status-line agy
-npx @elbhnasy/status-line hermes
-npx @elbhnasy/status-line opencode
+npx github:Elbhnasy/status-line all
 ```
 
-Add `--dry-run` to see what would change, or `--uninstall` to revert. `status-line list` shows
-each CLI's mechanism, and `status-line --help` prints usage.
+`all` installs the statusline for every supported CLI it finds on the device (Claude Code, agy,
+Hermes, OpenCode) and skips the ones that aren't installed. Restart those CLIs afterwards.
+
+To install for a single CLI:
+
+```bash
+npx github:Elbhnasy/status-line claude
+npx github:Elbhnasy/status-line agy
+npx github:Elbhnasy/status-line hermes
+npx github:Elbhnasy/status-line opencode
+```
+
+Add `--dry-run` to see what would change, or `--uninstall` to revert, e.g.
+`npx github:Elbhnasy/status-line all --uninstall`. `list` shows each CLI's mechanism, and
+`--help` prints usage.
+
+Once the package is published to npm, `npx @elbhnasy/status-line all` will work the same way.
 
 ## What each command installs
 

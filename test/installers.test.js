@@ -173,3 +173,51 @@ test('opencode: not installed at all is a prerequisite error', () => {
   assert.strictEqual(r.status, 1);
   assert.match(r.stderr, /OpenCode not found/);
 });
+
+test('all: installs every CLI found on the device, skips the rest, and uninstalls them', () => {
+  const home = tmpHome({ '.claude/.keep': '', '.config/opencode/.keep': '' });
+  const r = cli(home, ['all']);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.match(r.stdout, /Antigravity CLI \(agy\): skipped \(~\/\.gemini\/antigravity-cli not found/);
+  assert.match(r.stdout, /Hermes Agent: skipped/);
+  assert.ok(fs.existsSync(path.join(home, '.claude/hooks/statusline.js')));
+  assert.ok(fs.existsSync(path.join(home, '.config/opencode/plugins/statusline.tsx')));
+  assert.ok(!fs.existsSync(path.join(home, '.gemini')));
+
+  assert.match(cli(home, ['all']).stdout, /Already installed; nothing changed\.[\s\S]*Already installed; nothing changed\./);
+
+  const u = cli(home, ['all', '--uninstall']);
+  assert.strictEqual(u.status, 0, u.stderr);
+  assert.ok(!fs.existsSync(path.join(home, '.claude/hooks/statusline.js')));
+  assert.ok(!fs.existsSync(path.join(home, '.config/opencode/plugins/statusline.tsx')));
+  assert.match(cli(home, ['all', '--uninstall']).stdout, /nothing installed on this device/);
+});
+
+test('all --dry-run changes nothing', () => {
+  const home = tmpHome({ '.claude/.keep': '', '.gemini/antigravity-cli/.keep': '' });
+  const before = treeHash(home);
+  const r = cli(home, ['all', '--dry-run']);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.strictEqual((r.stdout.match(/Dry run: nothing was changed\./g) || []).length, 2);
+  assert.deepStrictEqual(treeHash(home), before);
+});
+
+test('all with no supported CLI on the device exits 1', () => {
+  const r = cli(tmpHome(), ['all']);
+  assert.strictEqual(r.status, 1);
+  assert.match(r.stdout, /None of the supported CLIs/);
+});
+
+test('a home directory with spaces gets a quoted, runnable statusLine command', () => {
+  const home = path.join(tmpHome(), 'John Doe');
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  assert.strictEqual(cli(home, ['claude']).status, 0);
+  const { command } = json(home, '.claude/settings.json').statusLine;
+  assert.strictEqual(command, `node "${path.join(home, '.claude/hooks/statusline.js')}"`);
+  // Run it the way Claude Code does: through a shell, session JSON on stdin.
+  const out = require('child_process').execSync(command, {
+    input: JSON.stringify({ model: { display_name: 'Opus' }, workspace: { current_dir: '/path/to/proj' } }),
+    env: { PATH: process.env.PATH, HOME: home }, encoding: 'utf8',
+  });
+  assert.match(out, /^proj │ Opus │ context: /);
+});

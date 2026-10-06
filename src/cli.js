@@ -9,6 +9,8 @@ const NAMES = Object.keys(registry);
 
 const USAGE = `Usage: status-line <cli> [--dry-run]     install the existing statusline for <cli>
        status-line <cli> --uninstall     revert what status-line installed for <cli>
+       status-line all [--dry-run]       install for every supported CLI found on this device
+       status-line all --uninstall       revert everything status-line installed
        status-line list                  supported CLIs and how each is wired up
        status-line help | --help         this message
        status-line --version
@@ -16,8 +18,9 @@ const USAGE = `Usage: status-line <cli> [--dry-run]     install the existing sta
 Supported CLIs: ${NAMES.join(', ')}
 
 Examples:
-  npx @elbhnasy/status-line claude
-  npx @elbhnasy/status-line agy --dry-run
+  npx github:Elbhnasy/status-line all
+  npx github:Elbhnasy/status-line claude
+  npx github:Elbhnasy/status-line agy --dry-run
 `;
 
 function suggest(input) {
@@ -112,6 +115,37 @@ function uninstall(inst, { dryRun }, io) {
   return 0;
 }
 
+// Every CLI whose prerequisites are met on this device; the rest are skipped, not errors.
+function all(opts, io) {
+  let found = 0;
+  let failed = 0;
+  for (const inst of Object.values(registry)) {
+    let code;
+    if (opts.uninstall) {
+      if (!manifest.get(inst.name)) continue;
+      io.out(`${inst.label}:`);
+      code = uninstall(inst, opts, io);
+    } else {
+      const { problems } = inst.check();
+      if (problems.length) {
+        io.out(`${inst.label}: skipped (${problems[0]})\n`);
+        continue;
+      }
+      code = install(inst, opts, io);
+    }
+    found++;
+    if (code !== 0) failed++;
+    io.out('');
+  }
+  if (found === 0) {
+    io.out(opts.uninstall ? 'status-line has nothing installed on this device.'
+      : `None of the supported CLIs (${NAMES.join(', ')}) were found on this device.`);
+    return opts.uninstall ? 0 : 1;
+  }
+  if (failed) io.err(`${failed} of ${found} failed; see the errors above.`);
+  return failed ? 1 : 0;
+}
+
 function main(argv, io) {
   const opts = parse(argv);
   if (opts.version) {
@@ -134,6 +168,13 @@ function main(argv, io) {
   if (cmd === 'list') {
     for (const inst of Object.values(registry)) io.out(`${inst.name.padEnd(9)} ${inst.label}: ${inst.mechanism}`);
     return 0;
+  }
+  if (cmd.toLowerCase() === 'all') {
+    if (extra.length) {
+      io.err(`error: unexpected argument "${extra[0]}"\n\n${USAGE}`);
+      return 2;
+    }
+    return all(opts, io);
   }
   const inst = registry[cmd.toLowerCase()];
   if (!inst) {

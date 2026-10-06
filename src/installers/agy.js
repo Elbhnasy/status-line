@@ -1,7 +1,7 @@
 // Antigravity CLI runs `statusLine.command` from ~/.gemini/antigravity-cli/settings.json.
 const os = require('os');
 const path = require('path');
-const { exists, tildify } = require('../lib/fsutil');
+const { exists, nodeCommand, tildify } = require('../lib/fsutil');
 const { onPath } = require('../lib/proc');
 const { copyFile, setJsonKey } = require('../lib/plan');
 
@@ -30,7 +30,7 @@ module.exports = {
       copyFile({ src: path.join(pkgRoot, 'statuslines/agy/statusline.js'), dest: p.script, mode: 0o755 }),
       setJsonKey({
         file: p.settings, key: 'statusLine',
-        value: { type: 'command', command: `node ${p.script}`, enabled: true }, merge: true,
+        value: { type: 'command', command: nodeCommand(p.script), enabled: true }, merge: true,
       }),
     ];
   },

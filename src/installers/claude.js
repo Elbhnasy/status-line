@@ -1,7 +1,7 @@
 // Claude Code runs `statusLine.command` from ~/.claude/settings.json and pipes session JSON to it.
 const os = require('os');
 const path = require('path');
-const { exists, tildify } = require('../lib/fsutil');
+const { exists, nodeCommand, tildify } = require('../lib/fsutil');
 const { copyFile, setJsonKey } = require('../lib/plan');
 
 function paths() {
@@ -25,7 +25,7 @@ module.exports = {
     const p = paths();
     return [
       copyFile({ src: path.join(pkgRoot, 'statuslines/claude/statusline.js'), dest: p.script, mode: 0o755 }),
-      setJsonKey({ file: p.settings, key: 'statusLine', value: { type: 'command', command: `node ${p.script}` }, merge: true }),
+      setJsonKey({ file: p.settings, key: 'statusLine', value: { type: 'command', command: nodeCommand(p.script) }, merge: true }),
     ];
   },
 };
