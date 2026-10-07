@@ -16,9 +16,11 @@ const BASE = fs.readFileSync(path.join(ROOT, 'statuslines/hermes/BASE'), 'utf8')
 const PATCH = path.join(ROOT, 'statuslines/hermes/statusbar-claude.patch');
 const FAKE = path.join(__dirname, 'helpers/fake-hermes.js');
 const MODIFIED = [
+  'agent/account_usage.py',
   'hermes_cli/cli_status_bar_mixin.py',
   'hermes_cli/config_defaults.py',
   'locales/en.yaml',
+  'tests/agent/test_account_usage_pool_fetch.py',
   'tests/hermes_cli/test_cli_status_bar.py',
 ];
 
@@ -118,6 +120,34 @@ test('hermes: no hermes binary is a prerequisite error', () => {
   const r = cli(tmpHome(), ['hermes']);
   assert.strictEqual(r.status, 1);
   assert.match(r.stderr, /`\/nonexistent\/hermes` not found/);
+});
+
+test('hermes: an upgrade from a previous version reverses the recorded patch first', { skip }, () => {
+  const { home, repo, env, config } = setup();
+
+  // Simulate the previous version's install: its patch is applied AND recorded in ~/.status-line,
+  // and it conflicts with the packaged one (its added file already exists, its context moved).
+  fs.writeFileSync(path.join(repo, 'hermes_cli/status_bar_claude.py'), '# previous version\n');
+  fs.writeFileSync(path.join(repo, 'hermes_cli/config_defaults.py'),
+    fs.readFileSync(path.join(repo, 'hermes_cli/config_defaults.py'), 'utf8')
+      .replace('"status_bar": {', '"status_bar": {\n            "style": "default",'));
+  git(repo, 'add', '-N', 'hermes_cli/status_bar_claude.py');
+  const previous = git(repo, 'diff');
+  git(repo, 'reset', '-q');
+  fs.mkdirSync(path.join(home, '.status-line'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.status-line/hermes-statusbar-claude.patch'), previous);
+
+  const r = cli(home, ['hermes'], env);
+  assert.strictEqual(r.status, 0, r.stderr);
+  // The packaged patch is in place, not the previous version's.
+  assert.match(fs.readFileSync(path.join(repo, 'hermes_cli/status_bar_claude.py'), 'utf8'),
+    /usage_windows_label/);
+  assert.match(fs.readFileSync(path.join(repo, 'hermes_cli/cli_status_bar_mixin.py'), 'utf8'),
+    /_account_usage_windows/);
+  assert.deepStrictEqual(config(), { 'display.status_bar.style': 'claude' });
+
+  assert.strictEqual(cli(home, ['hermes', '--uninstall'], env).status, 0);
+  assert.strictEqual(git(repo, 'status', '--porcelain'), '');
 });
 
 test('hermes: the packaged patch matches the live checkout', { skip }, () => {

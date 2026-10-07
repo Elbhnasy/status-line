@@ -101,20 +101,32 @@ function applyPatch(repo, patch, { reverse = false } = {}) {
 }
 
 function gitApply({ repo, patch, label, base }) {
+  // The patch this package applied last time (a previous version's STATUS_LINE install) is kept
+  // here; uninstall depends on it, and so does an upgrade from it.
+  const keptPath = () => path.join(os.homedir(), '.status-line', label);
   return {
     id: `git-apply:${repo}:${label}`,
     describe: () => `apply ${label} to ${tildify(repo)}`,
     isSatisfied: () => run('git', ['-C', repo, 'apply', '--reverse', '--check', patch]).status === 0,
     apply() {
-      const result = applyPatch(repo, patch);
+      let result = applyPatch(repo, patch);
+      if (!result.ok) {
+        // Upgrading: the checkout still carries the previous version's patch, which conflicts with
+        // this one (its added files already exist, its context moved). Reverse exactly that
+        // recorded patch and try again, so an upgrade needs no manual cleanup.
+        const kept = keptPath();
+        if (exists(kept) && applyPatch(repo, kept, { reverse: true }).ok) {
+          result = applyPatch(repo, patch);
+          if (!result.ok) applyPatch(repo, kept); // never leave a half-upgraded tree
+        }
+      }
       if (!result.ok) {
         throw new Error(`${label} does not apply to ${tildify(repo)}`
           + `${base ? ` (it was cut against ${base.slice(0, 11)})` : ''}; nothing was changed:\n${result.error}`);
       }
       // Keep a copy of the exact patch applied so uninstall does not depend on the package.
-      const kept = path.join(os.homedir(), '.status-line', label);
-      atomicWrite(kept, fs.readFileSync(patch));
-      return { kind: 'git-apply', id: `git-apply:${repo}:${label}`, repo, patch: kept, threeWay: result.threeWay };
+      atomicWrite(keptPath(), fs.readFileSync(patch));
+      return { kind: 'git-apply', id: `git-apply:${repo}:${label}`, repo, patch: keptPath(), threeWay: result.threeWay };
     },
   };
 }
@@ -141,16 +153,17 @@ function hermesConfigSet({ bin, key, value }) {
 // `hermes config unset <key>`: reverse of hermesConfigSet for keys the package stopped setting.
 // The UNDO record is the same shape, so the existing `hermes-config` undo branch restores it.
 function hermesConfigUnset({ bin, key }) {
-  const get = () => {
-    const r = run(bin, ['config', 'get', key]);
-    return r.status === 0 ? r.stdout.trim() : null;
-  };
+  const get = () => run(bin, ['config', 'get', key]);
+  // "Not set" is a non-zero exit that *says* so; any other failure (a broken `hermes`) must not
+  // masquerade as success, or the error would be swallowed instead of raised by apply().
+  const isUnset = (r) => r.status !== 0 && /not set/i.test(`${r.stdout}${r.stderr}`);
   return {
     id: `hermes-config-unset:${key}`,
     describe: () => `hermes config unset ${key}`,
-    isSatisfied: () => get() === null,
+    isSatisfied: () => isUnset(get()),
     apply() {
-      const previous = get();
+      const before = get();
+      const previous = isUnset(before) ? null : before.stdout.trim();
       const r = run(bin, ['config', 'unset', key]);
       if (r.status !== 0) throw new Error(`hermes config unset ${key} failed:\n${(r.stderr || r.stdout).trim()}`);
       return { kind: 'hermes-config', id: `hermes-config-unset:${key}`, bin, key, previous };

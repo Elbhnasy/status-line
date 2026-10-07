@@ -1,5 +1,24 @@
+diff --git a/agent/account_usage.py b/agent/account_usage.py
+index f1ae4fa74c575c3f9eb6a7528113e9f4197f8753..7a316b3a2685fbc7687fe283ba43c27660feb635 100644
+--- a/agent/account_usage.py
++++ b/agent/account_usage.py
+@@ -645,9 +645,13 @@ def _fetch_anthropic_account_usage(
+     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json", "Content-Type": "application/json",
+                "anthropic-beta": "oauth-2025-04-20", "User-Agent": "claude-code/2.1.0"}
+     payload = _get_json("https://api.anthropic.com/api/oauth/usage", headers, timeout=15.0)
++    # ``utilization`` is already a percentage (0-100), not a fraction: the live body reports
++    # ``five_hour.utilization`` and ``limits[].percent`` at the same scale, and Claude Code's own
++    # statusline stdin calls the very same window ``used_percentage``. Scaling values <= 1 would
++    # turn a 1% session into a full bar.
+     windows = _usage_windows(
+         payload, (("five_hour", "Current session"), ("seven_day", "Current week"), ("seven_day_opus", "Opus week"),
+-                  ("seven_day_sonnet", "Sonnet week")), "utilization", "resets_at", fraction=True,
++                  ("seven_day_sonnet", "Sonnet week")), "utilization", "resets_at",
+         model_scoped={"seven_day_opus", "seven_day_sonnet"},
+     )
+     details: list[str] = []
 diff --git a/hermes_cli/cli_status_bar_mixin.py b/hermes_cli/cli_status_bar_mixin.py
-index 47dac228a27c617fa99c4563d973e14d30fcaad8..706c1ccaf1df607f00798f0781ea0c40cda40b6e 100644
+index 47dac228a27c617fa99c4563d973e14d30fcaad8..204465fcaa392ca4c607265c687e6eec5026e4b3 100644
 --- a/hermes_cli/cli_status_bar_mixin.py
 +++ b/hermes_cli/cli_status_bar_mixin.py
 @@ -8,6 +8,7 @@ inside each method (``from cli import ...``) — never at module load time (impo
@@ -65,7 +84,7 @@ index 47dac228a27c617fa99c4563d973e14d30fcaad8..706c1ccaf1df607f00798f0781ea0c40
      def _status_bar_segments(
          self, snapshot, width: int, field_set, yolo_active: bool, *, styled: bool) -> list:
          """Ordered status-bar segments for one width tier (<52 / <76 / wide), each a list of
-@@ -1106,12 +1141,121 @@ class CLIStatusBarMixin:
+@@ -1106,12 +1141,141 @@ class CLIStatusBarMixin:
                  segs.append([(_DIM, f"Σ{format_token_count_compact(total_tokens)}")])
          return segs
  
@@ -75,34 +94,41 @@ index 47dac228a27c617fa99c4563d973e14d30fcaad8..706c1ccaf1df607f00798f0781ea0c40
 +        Modelled on ``hermes_cli/inventory.py``: the in-process cache is read, a snapshot older than
 +        ``account_usage_cache``'s staleness bound is treated as absent, and a missing/stale snapshot
 +        asks for a throttled background refresh (120 s per provider) instead of blocking a repaint on
-+        the network. The provider slug and its support flag are memoised because
-+        ``has_account_usage`` imports the provider registry on first call.
++        the network.
++
++        The provider is re-read on every call — ``self.agent`` is only created on the first turn
++        (``cli_init_mixin``: "initialized on first use"), so the status bar draws before it exists,
++        and ``/model`` can switch providers mid-session. Only the per-provider *support* verdict is
++        memoised (``has_account_usage`` imports the provider registry). An unresolved or ``auto``
++        provider yields no windows, and the caller falls back to the real session token total.
 +
 +        ``cached_account_usage`` is called WITHOUT ``base_url``: the legacy slot is keyed with an
 +        empty base_url, and that is the slot ``refresh_account_usage_async`` fills.
 +        """
-+        if not hasattr(self, "_status_bar_usage_provider"):
-+            agent = getattr(self, "agent", None)
-+            provider = str(getattr(agent, "provider", "") or "").strip().lower()
-+            self._status_bar_usage_provider = provider
-+            self._status_bar_usage_supported = False
-+            if provider:
-+                try:
-+                    from agent.account_usage_cache import has_account_usage
-+                    self._status_bar_usage_supported = bool(has_account_usage(provider))
-+                except Exception:
-+                    self._status_bar_usage_supported = False
-+        if not self._status_bar_usage_supported:
++        agent = getattr(self, "agent", None)
++        provider = str(getattr(agent, "provider", "") or getattr(self, "provider", "") or "").strip().lower()
++        if not provider or provider == "auto":
++            return []
++        support = self.__dict__.get("_status_bar_usage_support")
++        if support is None:
++            support = self._status_bar_usage_support = {}
++        if provider not in support:
++            try:
++                from agent.account_usage_cache import has_account_usage
++                support[provider] = bool(has_account_usage(provider))
++            except Exception:
++                support[provider] = False
++        if not support[provider]:
 +            return []
 +        try:
 +            from agent.account_usage_cache import (
 +                cached_account_usage, refresh_account_usage_async, snapshot_is_stale)
-+            snapshot = cached_account_usage(self._status_bar_usage_provider)
++            snapshot = cached_account_usage(provider)
 +            windows = [w for w in (snapshot.windows if snapshot else ())
 +                       if getattr(w, "used_percent", None) is not None]
 +            if windows and not snapshot_is_stale(snapshot):
 +                return windows
-+            refresh_account_usage_async([self._status_bar_usage_provider])
++            refresh_account_usage_async([provider])
 +        except Exception:
 +            pass
 +        return []
@@ -140,15 +166,21 @@ index 47dac228a27c617fa99c4563d973e14d30fcaad8..706c1ccaf1df607f00798f0781ea0c40
 +            "context": _bar_segment("cli.status_bar.ctx_label", ctx_pct, ctx_style),
 +        }
 +        # usage: the provider's windows when it publishes any, else the session's real token total.
++        shrunk_usage = None
++        shrunk_usage_done = False
 +        usage_pct, usage_text = usage_windows_label(self._account_usage_windows(), time.time())
-+        if usage_text is None:
++        style = _DIM
++        if usage_text is not None:
++            shrunk_usage = usage_windows_label(self._account_usage_windows(), time.time(),
++                                               binding_only=True)[1]
++        else:
 +            total_tokens = snapshot.get("session_total_tokens", 0)
 +            if total_tokens:
 +                from cli import format_token_count_compact
 +                usage_text = f"Σ{format_token_count_compact(total_tokens)} tok"
 +        if usage_text is not None:
-+            style = self._status_bar_context_style(round_half_up(usage_pct)) \
-+                if usage_pct is not None else _DIM
++            if usage_pct is not None:
++                style = self._status_bar_context_style(round_half_up(usage_pct))
 +            available["usage"] = [(_DIM, f"{t('cli.status_bar.usage_label')} "), (style, usage_text)]
 +
 +        # Requirement: ``model`` and ``context`` are never dropped by the builder, so they
@@ -167,6 +199,13 @@ index 47dac228a27c617fa99c4563d973e14d30fcaad8..706c1ccaf1df607f00798f0781ea0c40
 +        for name in DROP_ORDER:
 +            if _total() <= width:
 +                break
++            # Before giving up the ``usage`` segment, fall back to the binding window alone: the
++            # number that matters survives a narrow terminal, the secondary window is what goes.
++            if name == "usage" and not shrunk_usage_done and shrunk_usage is not None:
++                shrunk_usage_done = True
++                available["usage"] = [(_DIM, f"{t('cli.status_bar.usage_label')} "), (style, shrunk_usage)]
++                if _total() <= width:
++                    break
 +            if name in keep:
 +                keep.remove(name)
 +        return [available[name] for name in SEGMENT_ORDER if name in keep]
@@ -187,7 +226,7 @@ index 47dac228a27c617fa99c4563d973e14d30fcaad8..706c1ccaf1df607f00798f0781ea0c40
              model_short = snapshot["model_short"]
              battery_label = snapshot.get("battery_label") or ""
              field_set = self._get_status_bar_field_set()
-@@ -1144,6 +1288,19 @@ class CLIStatusBarMixin:
+@@ -1144,6 +1308,19 @@ class CLIStatusBarMixin:
              width = self._get_tui_terminal_width()
              field_set = self._get_status_bar_field_set()
  
@@ -236,11 +275,42 @@ index 0cd0189f354f7043f14d722bfe460194efd0b7ac..c59befe5c4ab82700c6d8520ca49517f
      yolo_badge: "⚠ YOLO"
      stash_header_one: "📌 Stash ({count} item)"
      stash_header_other: "📌 Stash ({count} items)"
+diff --git a/tests/agent/test_account_usage_pool_fetch.py b/tests/agent/test_account_usage_pool_fetch.py
+index d3d1a2a96d232ec8d3f9583cea6d8cd58ddb3ddd..49d18036b6eb5c3928da9bd4794af598bfb2c28f 100644
+--- a/tests/agent/test_account_usage_pool_fetch.py
++++ b/tests/agent/test_account_usage_pool_fetch.py
+@@ -147,10 +147,11 @@ def test_anthropic_fetch_honors_explicit_api_key_and_marks_model_scoped_windows(
+ 
+     def fake_get_json(url, headers, *, timeout):
+         called["url"], called["headers"] = url, headers
+-        return {"five_hour": {"utilization": 0.3, "resets_at": "2026-10-05T12:00:00Z"},
+-                "seven_day": {"utilization": 0.2, "resets_at": "2026-10-08T12:00:00Z"},
+-                "seven_day_opus": {"utilization": 1.0, "resets_at": "2026-10-09T12:00:00Z"},
+-                "seven_day_sonnet": {"utilization": 0.4, "resets_at": "2026-10-09T12:00:00Z"}}
++        # Percent shapes, as the live endpoint returns them (``limits[].percent`` agrees).
++        return {"five_hour": {"utilization": 1.0, "resets_at": "2026-10-05T12:00:00Z"},
++                "seven_day": {"utilization": 20.0, "resets_at": "2026-10-08T12:00:00Z"},
++                "seven_day_opus": {"utilization": 30.0, "resets_at": "2026-10-09T12:00:00Z"},
++                "seven_day_sonnet": {"utilization": 40.0, "resets_at": "2026-10-09T12:00:00Z"}}
+ 
+     monkeypatch.setattr(account_usage, "_get_json", fake_get_json)
+     monkeypatch.setattr(account_usage, "resolve_anthropic_token",
+@@ -164,7 +165,9 @@ def test_anthropic_fetch_honors_explicit_api_key_and_marks_model_scoped_windows(
+     assert scopes == {"Current session": "account", "Current week": "account",
+                       "Opus week": "model", "Sonnet week": "model"}
+     percents = {w.label: w.used_percent for w in snapshot.windows}
+-    assert percents["Opus week"] == 100.0 and percents["Current session"] == 30.0
++    # A percentage stays a percentage: 1.0 is 1% used, never a full window.
++    assert percents == {"Current session": 1.0, "Current week": 20.0,
++                        "Opus week": 30.0, "Sonnet week": 40.0}
+ 
+ 
+ def test_read_only_fetch_remembered_under_identity_slot(monkeypatch, tmp_path):
 diff --git a/tests/hermes_cli/test_cli_status_bar.py b/tests/hermes_cli/test_cli_status_bar.py
-index 738f3c0c436e4f2f410df82fd28d2a0922794b45..fade39d54b890000d34fe43255aee46834316d4f 100644
+index 738f3c0c436e4f2f410df82fd28d2a0922794b45..ab76f5f42dfcc7d8adbcab001a7e53f216475752 100644
 --- a/tests/hermes_cli/test_cli_status_bar.py
 +++ b/tests/hermes_cli/test_cli_status_bar.py
-@@ -522,3 +522,152 @@ class TestCacheHitBaselineReset:
+@@ -522,3 +522,233 @@ class TestCacheHitBaselineReset:
          with patch.object(cli_mod, "CLI_CONFIG", {"display": {"status_bar": {"fields": ["model", "duration"]}}}):
              text = cli_obj._build_status_bar_text(width=80)
          assert "weekly-digest" not in text
@@ -357,6 +427,24 @@ index 738f3c0c436e4f2f410df82fd28d2a0922794b45..fade39d54b890000d34fe43255aee468
 +        text = self._text(cli_obj, 120)
 +        assert text.endswith("usage: Σ790K tok")
 +
++    def test_narrow_terminal_keeps_the_binding_window_number(self, monkeypatch, tmp_path):
++        """The long real-window text must degrade to the binding window, not vanish."""
++        from datetime import datetime, timedelta, timezone
++
++        from agent.account_usage import AccountUsageWindow
++
++        now = datetime.now(timezone.utc)
++        windows = [AccountUsageWindow("Current session", 1.0, now + timedelta(hours=4)),
++                   AccountUsageWindow("Current week", 41.2, now + timedelta(days=4))]
++        cli_obj = self._fixture(monkeypatch, tmp_path)
++        monkeypatch.setattr(cli_obj, "_account_usage_windows", lambda: list(windows))
++
++        text = self._text(cli_obj, 100)
++        assert "usage: " in text and "wk 41%" in text, text
++        assert "5h " not in text.split("usage: ")[1], text        # the secondary window is what goes
++        assert cli_obj_width(cli_mod, text) <= 100
++
++
 +    def test_default_style_is_untouched(self, monkeypatch, tmp_path):
 +        text = self._text(self._fixture(monkeypatch, tmp_path), 120, style="default")
 +        assert "16K/200K" in text            # legacy context_detail segment
@@ -366,6 +454,69 @@ index 738f3c0c436e4f2f410df82fd28d2a0922794b45..fade39d54b890000d34fe43255aee468
 +    def test_long_line_is_trimmed_not_wrapped(self, monkeypatch, tmp_path):
 +        text = self._text(self._fixture(monkeypatch, tmp_path), 40)
 +        assert cli_obj_width(cli_mod, text) <= 40
++
++
++class TestAccountUsageWindows:
++    """``_account_usage_windows``: provider lookup, cache read, staleness and the refresh call."""
++
++    @staticmethod
++    def _windows():
++        from datetime import datetime, timedelta, timezone
++
++        from agent.account_usage import AccountUsageSnapshot, AccountUsageWindow
++
++        now = datetime.now(timezone.utc)
++        return AccountUsageSnapshot(
++            provider="anthropic", source="oauth_usage_api", fetched_at=now,
++            windows=(AccountUsageWindow("Current session", 4.0, now + timedelta(hours=3)),
++                     AccountUsageWindow("Current week", 9.0, now + timedelta(days=3))))
++
++    @staticmethod
++    def _patch_cache(monkeypatch, *, supported, cached):
++        from agent import account_usage_cache as cache
++
++        refreshes = []
++        monkeypatch.setattr(cache, "has_account_usage", lambda slug: supported)
++        monkeypatch.setattr(cache, "cached_account_usage", lambda *a, **k: cached)
++        monkeypatch.setattr(cache, "refresh_account_usage_async",
++                            lambda providers: refreshes.append(tuple(providers)))
++        return refreshes
++
++    def test_the_provider_is_re_read_on_every_call(self, monkeypatch):
++        """The first status bar is drawn before ``self.agent`` exists (created on the first turn),
++        so an empty provider must not be remembered for the session; ``/model`` may switch later."""
++        refreshes = self._patch_cache(monkeypatch, supported=True, cached=self._windows())
++        cli_obj = _make_cli()
++        cli_obj.agent = None
++        cli_obj.provider = "auto"
++        assert cli_obj._account_usage_windows() == []
++
++        cli_obj.agent = SimpleNamespace(provider="anthropic", base_url="")
++        windows = cli_obj._account_usage_windows()
++        assert [w.label for w in windows] == ["Current session", "Current week"]
++        assert refreshes == [], "a fresh snapshot is rendered as-is"
++
++    def test_a_provider_without_usage_support_shows_nothing(self, monkeypatch):
++        refreshes = self._patch_cache(monkeypatch, supported=False, cached=self._windows())
++        cli_obj = _make_cli()
++        cli_obj.agent = SimpleNamespace(provider="openrouter", base_url="")
++        assert cli_obj._account_usage_windows() == []
++        assert refreshes == [], "an unsupported provider must not be refreshed in a loop"
++
++    def test_a_stale_snapshot_is_ignored_and_a_refresh_requested(self, monkeypatch):
++        from datetime import datetime, timedelta, timezone
++
++        from agent.account_usage import AccountUsageSnapshot, AccountUsageWindow
++
++        now = datetime.now(timezone.utc)
++        stale = AccountUsageSnapshot(
++            provider="anthropic", source="oauth_usage_api", fetched_at=now - timedelta(minutes=30),
++            windows=(AccountUsageWindow("Current session", 4.0, now + timedelta(hours=3)),))
++        refreshes = self._patch_cache(monkeypatch, supported=True, cached=stale)
++        cli_obj = _make_cli()
++        cli_obj.agent = SimpleNamespace(provider="anthropic", base_url="")
++        assert cli_obj._account_usage_windows() == []
++        assert refreshes == [("anthropic",)]
 +
 +
 +def cli_obj_width(_mod, text):
@@ -395,10 +546,10 @@ index 738f3c0c436e4f2f410df82fd28d2a0922794b45..fade39d54b890000d34fe43255aee468
 +        assert cli_obj._status_bar_display_width(text) <= 120
 diff --git a/hermes_cli/status_bar_claude.py b/hermes_cli/status_bar_claude.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..2760556af549d22c3fa422f17e49d1683cf09670
+index 0000000000000000000000000000000000000000..273a2e4d3fbf13cb75973202912cd043958cd712
 --- /dev/null
 +++ b/hermes_cli/status_bar_claude.py
-@@ -0,0 +1,191 @@
+@@ -0,0 +1,195 @@
 +"""Pure helpers for the Claude-Code-style status bar (``display.status_bar.style: claude``).
 +
 +The layout implemented by ``cli_status_bar_mixin._claude_status_bar_segments`` is::
@@ -468,11 +619,14 @@ index 0000000000000000000000000000000000000000..2760556af549d22c3fa422f17e49d168
 +def format_window_percent(used_percent) -> str:
 +    """One decimal below 10% (``1.5603 -> "1.6"``), integer at or above (``41.2 -> "41"``).
 +
-+    Normalised to one decimal first, so a float artifact (``1 - 0.9 -> 9.999999999999998``) still
-+    prints ``10``, not ``10.0``.
++    The *branch* comes from the value rounded to one decimal (so 9.96 and a
++    ``1 - 0.9 = 0.0999…`` float artifact both stay "10" rather than "10.0"), but the integer is
++    rounded from the raw number — rounding twice would print 12.46% as "13". ``round_half_up``
++    rather than the built-in ``round``, whose banker's rounding disagrees with the JS scripts.
 +    """
-+    value = round(float(used_percent), 1)
-+    return f"{value:.1f}" if value < 10 else f"{round_half_up(value)}"
++    value = float(used_percent)
++    one_decimal = round_half_up(value * 10) / 10
++    return f"{one_decimal:.1f}" if one_decimal < 10 else f"{round_half_up(value)}"
 +
 +
 +def _seconds_until(reset_at, now) -> Optional[float]:
@@ -518,7 +672,7 @@ index 0000000000000000000000000000000000000000..2760556af549d22c3fa422f17e49d168
 +    return FILLED * filled + EMPTY * (width - filled)
 +
 +
-+def usage_windows_label(windows, now, width: int = BAR_WIDTH):
++def usage_windows_label(windows, now, width: int = BAR_WIDTH, binding_only: bool = False):
 +    """``(bar_percent, text)`` for the claude-style ``usage:`` segment, or ``(None, None)``.
 +
 +    ``windows`` are ``agent.account_usage.AccountUsageWindow``-shaped. The segment shows every live
@@ -528,11 +682,14 @@ index 0000000000000000000000000000000000000000..2760556af549d22c3fa422f17e49d168
 +    ``used_percent`` among account-scoped windows); model-scoped windows (``Opus week``) are shown
 +    but never set the bar, because they cannot exhaust the account. A window whose ``reset_at`` has
 +    passed is dropped rather than rendered stale; with no live window left the caller shows a real
-+    absolute value instead. The label is dropped only when the provider published a single window —
-+    a window dropped for expiry keeps its label, so the survivor is never mistaken for it.
++    absolute value instead.
++
++    Every window keeps its label even when it is the only one (a provider that publishes a single
++    window, or whose others expired), so the survivor can never be mistaken for a different window.
++    ``binding_only`` renders just the binding window: the narrow-terminal form the caller falls back
++    to before giving up the segment entirely.
 +    """
 +    live = []
-+    published = 0
 +    for window in windows or ():
 +        used = getattr(window, "used_percent", None)
 +        if used is None or isinstance(used, bool):
@@ -543,7 +700,6 @@ index 0000000000000000000000000000000000000000..2760556af549d22c3fa422f17e49d168
 +            continue
 +        if used != used:  # NaN
 +            continue
-+        published += 1
 +        reset_at = getattr(window, "reset_at", None)
 +        if reset_at is not None and _seconds_until(reset_at, now) is None:
 +            continue  # its window already reset
@@ -555,14 +711,13 @@ index 0000000000000000000000000000000000000000..2760556af549d22c3fa422f17e49d168
 +    order = {name: index for index, name in enumerate(WINDOW_ORDER)}
 +    rest = sorted(((w, used) for w, used in live if w is not binding),
 +                  key=lambda pair: order.get(_short_window_label(getattr(pair[0], "label", "")), 99))
++    shown = [(binding, bar_pct)] if binding_only else [(binding, bar_pct)] + rest
 +    parts = []
-+    for window, used in [(binding, bar_pct)] + rest:
++    for window, used in shown:
 +        label = _short_window_label(getattr(window, "label", ""))
 +        seconds = _seconds_until(getattr(window, "reset_at", None), now)
 +        parts.append(f"{label} {format_window_percent(used)}%"
 +                     + (f" ({format_window_duration(seconds)})" if seconds is not None else ""))
-+    if published == 1:
-+        parts[0] = parts[0].split(" ", 1)[1]   # a provider with a single window needs no label
 +    return bar_pct, f"{render_bar(bar_pct, width)} {parts[0]}" + "".join(f" · {p}" for p in parts[1:])
 +
 +
@@ -592,10 +747,10 @@ index 0000000000000000000000000000000000000000..2760556af549d22c3fa422f17e49d168
 +    return requested_effort(reasoning_config) or default
 diff --git a/tests/hermes_cli/test_status_bar_claude.py b/tests/hermes_cli/test_status_bar_claude.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..0ee5a80d79cda902ac7381cccff34a0b2e0cf771
+index 0000000000000000000000000000000000000000..2ccb2d7e16243b79a7e7cfff530f63322c623249
 --- /dev/null
 +++ b/tests/hermes_cli/test_status_bar_claude.py
-@@ -0,0 +1,141 @@
+@@ -0,0 +1,152 @@
 +"""Unit tests for the pure Claude-style status-bar helpers (no live HermesCLI)."""
 +
 +from datetime import datetime, timedelta, timezone
@@ -663,9 +818,17 @@ index 0000000000000000000000000000000000000000..0ee5a80d79cda902ac7381cccff34a0b
 +        41.2, "\u2588\u2588\u2588\u2588" + "\u2591" * 6 + " wk 41% (4d)")
 +
 +
-+def test_usage_windows_label_single_window_has_no_label():
++def test_usage_windows_label_single_window_keeps_its_label():
++    # The provider may publish only one window (or the others expired): the label stays, so the
++    # survivor can never be read as a different window.
 +    assert sb.usage_windows_label([_w("Current session", 42.0, 2 + 14 / 60)], EPOCH) == (
-+        42.0, "\u2588\u2588\u2588\u2588" + "\u2591" * 6 + " 42% (2h14m)")
++        42.0, "\u2588\u2588\u2588\u2588" + "\u2591" * 6 + " 5h 42% (2h14m)")
++
++
++def test_usage_windows_label_binding_only_keeps_the_number_and_drops_the_rest():
++    windows = [_w("Current session", 1.0, 4 + 7 / 60), _w("Current week", 41.2, 96.0)]
++    assert sb.usage_windows_label(windows, EPOCH, binding_only=True) == (
++        41.2, "\u2588\u2588\u2588\u2588" + "\u2591" * 6 + " wk 41% (4d)")
 +
 +
 +def test_usage_windows_label_derives_codex_labels():
@@ -680,7 +843,7 @@ index 0000000000000000000000000000000000000000..0ee5a80d79cda902ac7381cccff34a0b
 +
 +def test_usage_windows_label_counts_a_missing_reset_as_live():
 +    window = AccountUsageWindow(label="Current session", used_percent=7.0, reset_at=None)
-+    assert sb.usage_windows_label([window], EPOCH) == (7.0, "\u2588" + "\u2591" * 9 + " 7.0%")
++    assert sb.usage_windows_label([window], EPOCH) == (7.0, "\u2588" + "\u2591" * 9 + " 5h 7.0%")
 +
 +
 +def test_window_duration_rule():
@@ -698,6 +861,9 @@ index 0000000000000000000000000000000000000000..0ee5a80d79cda902ac7381cccff34a0b
 +    assert sb.format_window_percent(9.99) == "10"               # rounds onto the boundary, then integer
 +    assert sb.format_window_percent(9.999999999999998) == "10"  # float artifact, not "10.0"
 +    assert sb.format_window_percent(10) == "10"
++    assert sb.format_window_percent(12.46) == "12"              # no double rounding: not 12.5 -> 13
++    assert sb.format_window_percent(12.5) == "13"               # halves round up, as the JS scripts do
++    assert sb.format_window_percent(6.25) == "6.3"              # not Python's banker's rounding (6.2)
 +    assert sb.format_window_percent(41.2) == "41"
 +    assert sb.format_window_percent(100) == "100"
 +

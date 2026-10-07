@@ -50,8 +50,24 @@ function hasPytest([cmd, prefix]) {
   }
 }
 
-const PYTEST = interpreterCandidates().find(hasPytest) || null;
-const run = (args, options) => execFileSync(PYTEST[0], [...PYTEST[1], ...args], options);
+// Resolved once, and only when this opt-in suite was actually requested: probing candidates can
+// itself sync an environment (the run-in-hermes-env fallback installs on first use), and running
+// `npm test` must never touch the real Hermes install.
+let pytestCommand;
+function pytestRunner() {
+  if (pytestCommand === undefined) {
+    pytestCommand = process.env.STATUS_LINE_INTEGRATION === '1'
+      ? interpreterCandidates().find(hasPytest) || null
+      : null;
+  }
+  return pytestCommand;
+}
+
+const PYTEST = pytestRunner();
+const run = (args, options) => {
+  const cmd = PYTEST;
+  return execFileSync(cmd[0], [...cmd[1], ...args], options);
+};
 
 const skip = process.env.STATUS_LINE_INTEGRATION !== '1' ? 'set STATUS_LINE_INTEGRATION=1'
   : !PYTEST ? 'no Hermes interpreter with pytest: set STATUS_LINE_HERMES_PYTHON' : false;
@@ -94,7 +110,8 @@ test('hermes: patched BASE passes Hermes status bar test suites', { skip, timeou
   Object.assign(childEnv, { HOME: home, HERMES_HOME: path.join(home, '.hermes') });
 
   const out = run(['-m', 'pytest', '-q', '-p', 'no:cacheprovider',
-    'tests/hermes_cli/test_status_bar_claude.py', 'tests/hermes_cli/test_cli_status_bar.py'],
+    'tests/hermes_cli/test_status_bar_claude.py', 'tests/hermes_cli/test_cli_status_bar.py',
+    'tests/agent/test_account_usage_pool_fetch.py'],
   { cwd: repo, encoding: 'utf8', env: childEnv });
   assert.match(out, /\d+ passed/);
   fs.rmSync(home, { recursive: true, force: true });
