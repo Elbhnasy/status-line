@@ -58,7 +58,7 @@ test('hermes: applies the patch, sets config, is idempotent, and uninstalls clea
   assert.strictEqual(r.status, 0, r.stderr);
   assert.ok(fs.existsSync(path.join(repo, 'hermes_cli/status_bar_claude.py')));
   assert.match(fs.readFileSync(path.join(repo, 'hermes_cli/config_defaults.py'), 'utf8'), /"style": "default"/);
-  assert.deepStrictEqual(config(), { 'display.status_bar.style': 'claude', 'display.status_bar.usage_budget': '1000000' });
+  assert.deepStrictEqual(config(), { 'display.status_bar.style': 'claude' });
   // The patch touches only the working tree, like the original uncommitted change.
   assert.strictEqual(git(repo, 'diff', '--cached', '--name-only'), '');
   assert.ok(fs.existsSync(path.join(home, '.status-line/hermes-statusbar-claude.patch')));
@@ -96,7 +96,7 @@ test('hermes: upstream drift near a hunk is merged with --3way and still uninsta
   assert.strictEqual(r.status, 0, r.stderr);
   const patched = fs.readFileSync(file, 'utf8');
   assert.match(patched, /idle_since \(upstream\)\./);
-  assert.match(patched, /"usage_budget": 1000000/);
+  assert.match(patched, /"style": "default"/);
 
   const u = cli(home, ['hermes', '--uninstall'], env);
   assert.strictEqual(u.status, 0, u.stderr);

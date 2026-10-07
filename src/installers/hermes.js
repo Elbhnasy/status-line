@@ -5,7 +5,7 @@ const os = require('os');
 const path = require('path');
 const { exists, tildify } = require('../lib/fsutil');
 const { run } = require('../lib/proc');
-const { gitApply, hermesConfigSet } = require('../lib/plan');
+const { gitApply, hermesConfigSet, hermesConfigUnset } = require('../lib/plan');
 
 const PATCH_NAME = 'hermes-statusbar-claude.patch';
 
@@ -48,7 +48,9 @@ module.exports = {
     return [
       gitApply({ repo: dir, patch: path.join(pkgRoot, 'statuslines/hermes/statusbar-claude.patch'), label: PATCH_NAME, base }),
       hermesConfigSet({ bin: bin(), key: 'display.status_bar.style', value: 'claude' }),
-      hermesConfigSet({ bin: bin(), key: 'display.status_bar.usage_budget', value: 1000000 }),
+      // The claude-style usage segment reports the provider's real windows, so the retired token
+      // budget must not linger in a config that a previous version wrote.
+      hermesConfigUnset({ bin: bin(), key: 'display.status_bar.usage_budget' }),
     ];
   },
 };

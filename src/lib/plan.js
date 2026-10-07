@@ -138,6 +138,26 @@ function hermesConfigSet({ bin, key, value }) {
   };
 }
 
+// `hermes config unset <key>`: reverse of hermesConfigSet for keys the package stopped setting.
+// The UNDO record is the same shape, so the existing `hermes-config` undo branch restores it.
+function hermesConfigUnset({ bin, key }) {
+  const get = () => {
+    const r = run(bin, ['config', 'get', key]);
+    return r.status === 0 ? r.stdout.trim() : null;
+  };
+  return {
+    id: `hermes-config-unset:${key}`,
+    describe: () => `hermes config unset ${key}`,
+    isSatisfied: () => get() === null,
+    apply() {
+      const previous = get();
+      const r = run(bin, ['config', 'unset', key]);
+      if (r.status !== 0) throw new Error(`hermes config unset ${key} failed:\n${(r.stderr || r.stdout).trim()}`);
+      return { kind: 'hermes-config', id: `hermes-config-unset:${key}`, bin, key, previous };
+    },
+  };
+}
+
 // Reverse a JSON edit: restore the prior value, and drop a file status-line created if empty.
 function finishJsonUndo(rec, json, data) {
   if (!rec.fileExisted && Object.keys(data).length === 0) {
@@ -191,4 +211,4 @@ const UNDO = {
   },
 };
 
-module.exports = { copyFile, setJsonKey, addToJsonArray, gitApply, hermesConfigSet, UNDO };
+module.exports = { copyFile, setJsonKey, addToJsonArray, gitApply, hermesConfigSet, hermesConfigUnset, UNDO };
