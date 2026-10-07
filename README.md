@@ -10,23 +10,26 @@ single window (and, for Hermes, instead of a percentage of a made-up token budge
 You need Node.js 18+:
 
 ```bash
-npx @elbhnasy/status-line all
+npx @ktarek/status-line all
 ```
 
 `all` installs the statusline for every supported CLI it finds on the device (Claude Code, agy,
 Hermes, OpenCode) and skips the ones that aren't installed. Restart those CLIs afterwards.
 
+The package was first published as `@elbhnasy/status-line`, which stays at 0.1.0 and is no longer
+updated; use `@ktarek/status-line`. Installing over a 0.1.0 install needs no cleanup.
+
 To install for a single CLI:
 
 ```bash
-npx @elbhnasy/status-line claude
-npx @elbhnasy/status-line agy
-npx @elbhnasy/status-line hermes
-npx @elbhnasy/status-line opencode
+npx @ktarek/status-line claude
+npx @ktarek/status-line agy
+npx @ktarek/status-line hermes
+npx @ktarek/status-line opencode
 ```
 
 Add `--dry-run` to see what would change, or `--uninstall` to revert, e.g.
-`npx @elbhnasy/status-line all --uninstall`. `list` shows each CLI's mechanism, and `--help`
+`npx @ktarek/status-line all --uninstall`. `list` shows each CLI's mechanism, and `--help`
 prints usage. Running straight from GitHub also works (needs git):
 `npx github:Elbhnasy/status-line all`.
 

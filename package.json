@@ -1,5 +1,5 @@
 {
-  "name": "@elbhnasy/status-line",
+  "name": "@ktarek/status-line",
   "version": "0.2.0",
   "description": "Install my existing statuslines for Claude Code, Antigravity CLI (agy), Hermes Agent and OpenCode, with real provider usage values",
   "author": "Elbhnasy",
