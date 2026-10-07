@@ -1,20 +1,26 @@
-// The Claude statusline must be the original file, byte for byte, with unchanged output.
+// The Claude statusline's output is pinned by recorded goldens (scripts/record-goldens.js), and its
+// usage segment is checked against the shared real-usage contract (test/fixtures/usage-cases.js)
+// that the agy script must satisfy too.
 const test = require('node:test');
 const assert = require('node:assert');
 const path = require('path');
 const { sha256 } = require('../src/lib/fsutil');
 const { runStatusline } = require('./helpers/run');
+const { stripAnsi } = require('./helpers/ansi');
 const cases = require('./fixtures/cases');
+const usageCases = require('./fixtures/usage-cases');
 const golden = require('./fixtures/golden/claude.json');
 
 const ROOT = path.join(__dirname, '..');
 const SCRIPT = path.join(ROOT, 'statuslines/claude/statusline.js');
 
-// sha256 of ~/.claude/hooks/statusline.js when it was imported.
-const ORIGINAL_SHA = 'f7ebef22dd7e08797c8e37c7e487c68fdee44be406170c686d75f391ee0ff5fa';
+// sha256 of statuslines/claude/statusline.js as shipped. It is deliberately NO LONGER byte-identical
+// to the original at ~/.claude/hooks/statusline.js: reporting both real rate-limit windows at real
+// precision is the point of this change. This pin only catches accidental edits.
+const PACKAGED_SHA = '08fe288d11c06ea8d201782760944616008853189d87222c2bb2d16f71b8b44f';
 
-test('claude statusline is byte-identical to the original', () => {
-  assert.strictEqual(sha256(SCRIPT), ORIGINAL_SHA);
+test('claude statusline hash is pinned (tripwire only)', () => {
+  assert.strictEqual(sha256(SCRIPT), PACKAGED_SHA);
 });
 
 test('opencode statusline is byte-identical to the original', () => {
@@ -27,9 +33,20 @@ test('every claude case has a golden', () => {
 });
 
 for (const [id, c] of Object.entries(cases.claude)) {
-  test(`claude output matches original: ${id}`, () => {
+  test(`claude output matches the recorded golden: ${id}`, () => {
     const r = runStatusline(SCRIPT, c);
     assert.strictEqual(r.status, 0, r.stderr);
     assert.strictEqual(r.stdout, golden[id]);
+  });
+}
+
+// The shared real-usage contract: the same windows must render identically here and in agy.
+// The harness rebuilds the child env from scratch (test/helpers/run.js), so no API key leaks in.
+for (const c of usageCases) {
+  test(`claude usage segment: ${c.name}`, () => {
+    const stdin = JSON.stringify(cases.claudePayload({ rate_limits: cases.claudeRateLimits(c.windows) }));
+    const line = stripAnsi(runStatusline(SCRIPT, { stdin }).stdout);
+    if (c.segment === null) assert.ok(!line.includes('usage:'), line);
+    else assert.ok(line.includes(`usage: ${c.segment}`), line);
   });
 }

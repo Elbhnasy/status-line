@@ -1,5 +1,6 @@
 // Statusline input cases. Golden outputs for each case were recorded from the
-// ORIGINAL live scripts (scripts/record-goldens.js) before anything changed.
+// ORIGINAL live scripts (scripts/record-goldens.js) before anything changed; goldens for cases that
+// the real-usage change deliberately altered are re-recorded from the packaged script.
 const { NOW } = require('../helpers/run');
 
 const MIN = 60000;
@@ -20,11 +21,40 @@ function fiveHour(pct, resetsInMs) {
   return { rate_limits: { five_hour: { used_percentage: pct, resets_at: Math.floor((NOW + resetsInMs) / 1000) } } };
 }
 
+// Shared-usage-case windows ({label, pct, resetsAt}) -> the Claude Code stdin shape
+// (`five_hour` / `seven_day`, epoch seconds). Also used by the shared-contract tests.
+const CLAUDE_WINDOW_KEYS = { '5h': 'five_hour', 'wk': 'seven_day' };
+function claudeRateLimits(windows) {
+  const out = {};
+  for (const w of windows) {
+    const key = CLAUDE_WINDOW_KEYS[w.label];
+    if (!key) continue;
+    out[key] = { used_percentage: w.pct, resets_at: w.resetsAt ? Math.floor(w.resetsAt / 1000) : undefined };
+  }
+  return out;
+}
+
 const claude = {
   'full-with-rate-limits': { stdin: claudePayload(fiveHour(42, 2 * HOUR + 14 * MIN)) },
   'usage-60': { stdin: claudePayload(fiveHour(60, 30 * MIN)) },
   'usage-80': { stdin: claudePayload(fiveHour(80, 4 * HOUR)) },
   'usage-95': { stdin: claudePayload(fiveHour(95, 5 * MIN)) },
+  'usage-5h-and-week': {
+    stdin: claudePayload({
+      rate_limits: claudeRateLimits([
+        { label: '5h', pct: 42, resetsAt: NOW + 2 * HOUR + 14 * MIN },
+        { label: 'wk', pct: 3.2, resetsAt: NOW + 33 * HOUR },
+      ]),
+    }),
+  },
+  'usage-5h-expired': {
+    stdin: claudePayload({
+      rate_limits: claudeRateLimits([
+        { label: '5h', pct: 88, resetsAt: NOW - MIN },
+        { label: 'wk', pct: 41.2, resetsAt: NOW + 4 * 24 * HOUR },
+      ]),
+    }),
+  },
   'no-rate-limits-no-creds': { stdin: claudePayload() },
   'context-45': { stdin: claudePayload({ context_window: { remaining_percentage: 55 } }) },
   'context-55': { stdin: claudePayload({ context_window: { remaining_percentage: 45 } }) },
@@ -41,23 +71,34 @@ const claude = {
     stdin: claudePayload(),
     files: { '.claude/todos/sess1-agent-abc.json': [{ status: 'in_progress', activeForm: 'Running tests' }] },
   },
+  // usage-cache-v3 holds every window the source published (v2 held one 5-hour percentage).
   'fresh-cache': {
     stdin: claudePayload(),
-    files: { '.claude/cache/usage-cache-v2.json': { pct: 33, resetsAt: NOW + HOUR, fetchedAt: NOW - MIN } },
+    files: {
+      '.claude/cache/usage-cache-v3.json': {
+        windows: [
+          { label: '5h', pct: 33, resetsAt: NOW + HOUR },
+          { label: 'wk', pct: 12, resetsAt: NOW + 4 * 24 * HOUR },
+        ],
+        fetchedAt: NOW - MIN,
+      },
+    },
   },
   'stale-cache-backoff': {
     stdin: claudePayload(),
     files: {
-      '.claude/cache/usage-cache-v2.json': {
-        pct: 63, resetsAt: NOW + 3 * HOUR, fetchedAt: NOW - 10 * MIN, backoffUntil: NOW + MIN,
+      '.claude/cache/usage-cache-v3.json': {
+        windows: [{ label: '5h', pct: 63, resetsAt: NOW + 3 * HOUR }],
+        fetchedAt: NOW - 10 * MIN, backoffUntil: NOW + MIN,
       },
     },
   },
   'expired-cache-window': {
     stdin: claudePayload(),
     files: {
-      '.claude/cache/usage-cache-v2.json': {
-        pct: 63, resetsAt: NOW - MIN, fetchedAt: NOW - 10 * MIN, backoffUntil: NOW + MIN,
+      '.claude/cache/usage-cache-v3.json': {
+        windows: [{ label: '5h', pct: 63, resetsAt: NOW - MIN }],
+        fetchedAt: NOW - 10 * MIN, backoffUntil: NOW + MIN,
       },
     },
   },
@@ -97,4 +138,4 @@ for (const set of [claude, agy]) {
   }
 }
 
-module.exports = { claude, agy, NOW, MIN, HOUR, agyPayload };
+module.exports = { claude, agy, NOW, MIN, HOUR, agyPayload, claudePayload, claudeRateLimits };

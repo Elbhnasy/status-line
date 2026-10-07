@@ -1,11 +1,14 @@
 #!/usr/bin/env node
 // Claude Code Enhanced Statusline
-// Shows: directory | model | context usage | API usage (5-hour limit) | current task
+// Shows: directory | model | context usage | API usage (rate-limit windows) | current task
 // Auto-detects API key vs subscription usage
 // https://github.com/TahaSabir0/claude-statusline
 //
-// Usage source order: stdin rate_limits (from Claude Code) -> fresh shared cache
-// -> OAuth usage API (with 429 backoff) -> stale cache shown dimmed with its age.
+// Usage segment: every rate-limit window the source publishes (5-hour + weekly), labelled, at real
+// precision, each with its own reset countdown — plus the gateway's dollar figures when it exposes
+// them. Source order: stdin rate_limits (from Claude Code) -> fresh shared cache -> OAuth usage API
+// (with 429 backoff) -> stale cache shown dimmed with its age. A window whose resets_at has passed
+// is dropped, exactly as Claude Code drops it; with no live window left the segment is hidden.
 
 const fs = require('fs');
 const path = require('path');
@@ -16,7 +19,7 @@ const IS_API_KEY = !!process.env.ANTHROPIC_API_KEY;
 
 // Cache configuration (shared across all sessions)
 const CACHE_DIR = path.join(os.homedir(), '.claude', 'cache');
-const USAGE_CACHE_FILE = path.join(CACHE_DIR, 'usage-cache-v2.json');
+const USAGE_CACHE_FILE = path.join(CACHE_DIR, 'usage-cache-v3.json'); // v2 held one 5-hour number
 const CACHE_FRESH_MS = 180000;     // Don't hit the API while the cache is younger than 3 min
 const BACKOFF_DEFAULT_MS = 300000; // After an API failure, wait 5 min before retrying
 
@@ -60,27 +63,110 @@ function getContextBar(remaining) {
   return coloredBar;
 }
 
+// 4d / 1d9h / 2h14m / 25m — zero components are dropped, days keep long windows readable.
 function formatDuration(ms) {
   const totalMins = Math.max(0, Math.floor(ms / 60000));
-  const hours = Math.floor(totalMins / 60);
+  const totalHours = Math.floor(totalMins / 60);
+  const days = Math.floor(totalHours / 24);
+  const hours = totalHours % 24;
   const mins = totalMins % 60;
-  return hours > 0 ? `${hours}h${mins}m` : `${mins}m`;
+  if (days > 0) return hours > 0 ? `${days}d${hours}h` : `${days}d`;
+  if (totalHours > 0) return mins > 0 ? `${totalHours}h${mins}m` : `${totalHours}h`;
+  return `${totalMins}m`;
 }
 
-// Build the usage bar. The reset countdown is computed now, so a cached value
-// never shows a frozen time. staleAgeMs marks a value we could not refresh.
-function formatUsageBar(pct, resetsAtMs, staleAgeMs) {
-  const percentage = Math.max(0, Math.min(100, Math.round(pct)));
-  const barWidth = 10;
-  const filledWidth = Math.round((percentage / 100) * barWidth);
-  const bar = '█'.repeat(filledWidth) + '░'.repeat(barWidth - filledWidth);
-  const timeStr = resetsAtMs ? ` (${formatDuration(resetsAtMs - Date.now())})` : '';
+// One decimal below 10% (1.5603 -> "1.6"), an integer at or above (41.2 -> "41"): the precision the
+// provider published, never rounded away (1.5603% is not 2%). The value is normalised to one decimal
+// first, so a float artifact (1 - 0.9 = 0.0999… -> 9.999999999999998%) still prints "10", not "10.0".
+function formatWindowPercent(pct) {
+  const value = Math.round(pct * 10) / 10;
+  return value < 10 ? value.toFixed(1) : String(Math.round(value));
+}
 
-  if (staleAgeMs !== undefined) {
-    return `${colors.dim}${bar} ${percentage}%${timeStr} · ${formatDuration(staleAgeMs)} ago${colors.reset}`;
+const BAR_WIDTH = 10;
+const WINDOW_ORDER = ['5h', 'wk'];
+
+// The provider's own windows, labelled: `wk 3.0% (1d9h) · 5h 1.0% (4h4m)`. The bar comes from the
+// binding window (the live one with the highest used_percentage); a window whose resets_at has
+// passed is dropped rather than shown stale. Returns null when nothing is live — the caller then
+// shows no usage at all, which is honest: a percentage of nothing is not a value.
+function usageParts(windows, now) {
+  const usable = (windows || []).filter(w => typeof w.pct === 'number' && Number.isFinite(w.pct) && w.pct >= 0);
+  const live = usable.filter(w => w.resetsAt == null || w.resetsAt > now);
+  if (!live.length) return null;
+  const binding = live.reduce((a, b) => (b.pct > a.pct ? b : a));
+  const rest = live.filter(w => w !== binding)
+    .sort((a, b) => WINDOW_ORDER.indexOf(a.label) - WINDOW_ORDER.indexOf(b.label));
+  // A source that publishes a single window needs no label; one that published several keeps them,
+  // so a window dropped for expiry can never be mistaken for the one still shown.
+  const labelled = usable.length > 1;
+  const text = [binding, ...rest].map((w) => {
+    const label = labelled ? `${w.label} ` : '';
+    return `${label}${formatWindowPercent(w.pct)}%${w.resetsAt ? ` (${formatDuration(w.resetsAt - now)})` : ''}`;
+  }).join(' · ');
+  const filled = Math.max(0, Math.min(BAR_WIDTH, Math.round((binding.pct / 100) * BAR_WIDTH)));
+  return {
+    pct: binding.pct,
+    bar: '█'.repeat(filled) + '░'.repeat(BAR_WIDTH - filled),
+    text,
+  };
+}
+
+// The full `usage:` value: the window segment, the gateway's dollars when it published any, and a
+// dimmed age marker when the numbers could not be refreshed.
+function renderUsage(state, now) {
+  const parts = state && usageParts(state.windows, now);
+  if (!parts) return null;
+  if (state.staleAgeMs !== undefined) {
+    return `${colors.dim}${parts.bar} ${parts.text} · ${formatDuration(state.staleAgeMs)} ago${colors.reset}`;
   }
-  const color = getUsageColor(percentage);
-  return `${color}${bar} ${percentage}%${colors.reset}${colors.dim}${timeStr}${colors.reset}`;
+  const color = getUsageColor(parts.pct);
+  const spend = state.spend ? `${colors.dim} · ${state.spend}${colors.reset}` : '';
+  return `${color}${parts.bar} ${parts.text}${colors.reset}${spend}`;
+}
+
+const WINDOW_KEYS = [['5h', 'five_hour'], ['wk', 'seven_day']];
+
+// Claude Code's statusline stdin: rate_limits.{five_hour,seven_day} (percent + epoch-seconds reset),
+// plus spend_limit.{used_usd,limit_usd,period} behind a Claude apps gateway. Windows Claude Code has
+// already dropped are simply absent.
+function usageFromStdin(data) {
+  const limits = data && data.rate_limits;
+  if (!limits) return null;
+  const windows = [];
+  for (const [label, key] of WINDOW_KEYS) {
+    const window = limits[key];
+    if (!window || typeof window.used_percentage !== 'number') continue;
+    windows.push({
+      label, pct: window.used_percentage,
+      resetsAt: typeof window.resets_at === 'number' ? window.resets_at * 1000 : null,
+    });
+  }
+  const spendLimit = limits.spend_limit;
+  const spend = spendLimit && typeof spendLimit.used_usd === 'number'
+    && typeof spendLimit.limit_usd === 'number' && spendLimit.limit_usd > 0
+    ? `$${spendLimit.used_usd.toFixed(2)}/$${spendLimit.limit_usd.toFixed(0)}${spendLimit.period ? ` ${spendLimit.period[0]}` : ''}`
+    : null;
+  return windows.length ? { windows, spend } : null;
+}
+
+// The OAuth usage API's body, same shape: `utilization` per window, and `extra_usage` is the only
+// money a subscription plan publishes there.
+function usageFromApi(body) {
+  const windows = [];
+  for (const [label, key] of WINDOW_KEYS) {
+    const window = body[key];
+    if (!window || typeof window.utilization !== 'number') continue;
+    const resetsAt = window.resets_at ? Date.parse(window.resets_at) : NaN;
+    windows.push({ label, pct: window.utilization, resetsAt: Number.isFinite(resetsAt) ? resetsAt : null });
+  }
+  if (!windows.length) return null;
+  const extra = body.extra_usage || {};
+  const spend = extra.is_enabled && typeof extra.used_credits === 'number'
+    && typeof extra.monthly_limit === 'number'
+    ? `${extra.used_credits.toFixed(2)}/${extra.monthly_limit.toFixed(2)} ${extra.currency || 'USD'}`
+    : null;
+  return { windows, spend };
 }
 
 function readCache() {
@@ -116,7 +202,7 @@ function parseRetryAfter(header) {
   return Number.isFinite(date) ? Math.max(0, date - Date.now()) : null;
 }
 
-// Calls back with {pct, resetsAt} on success or {error, retryAfterMs} on failure.
+// Calls back with {windows, spend} on success or {error, retryAfterMs} on failure.
 function fetchUsageFromApi(callback) {
   let done = false;
   const finish = (result) => {
@@ -161,12 +247,11 @@ function fetchUsageFromApi(callback) {
           });
         }
         try {
-          const fiveHour = JSON.parse(data).five_hour;
-          if (!fiveHour || typeof fiveHour.utilization !== 'number') {
-            return finish({ error: 'no-five-hour' });
+          const parsed = usageFromApi(JSON.parse(data));
+          if (!parsed) {
+            return finish({ error: 'no-windows' });
           }
-          const resetsAt = fiveHour.resets_at ? Date.parse(fiveHour.resets_at) : null;
-          finish({ pct: fiveHour.utilization, resetsAt: Number.isFinite(resetsAt) ? resetsAt : null });
+          finish(parsed);
         } catch (e) {
           finish({ error: 'bad-json' });
         }
@@ -185,29 +270,32 @@ function fetchUsageFromApi(callback) {
   }
 }
 
-// Resolve the usage bar from the best available source (see header comment).
+// Resolve the usage segment from the best available source (see header comment).
 function resolveUsage(data, callback) {
   const now = Date.now();
 
-  // 1. Claude Code passes rate limits on stdin for subscribers
-  const fiveHour = data?.rate_limits?.five_hour;
-  if (fiveHour && typeof fiveHour.used_percentage === 'number') {
-    const resetsAt = typeof fiveHour.resets_at === 'number' ? fiveHour.resets_at * 1000 : null;
-    writeCache({ pct: fiveHour.used_percentage, resetsAt, fetchedAt: now, source: 'stdin' });
-    return callback(formatUsageBar(fiveHour.used_percentage, resetsAt));
+  // 1. Claude Code passes the live rate limits on stdin for subscribers
+  const fromStdin = usageFromStdin(data);
+  if (fromStdin) {
+    writeCache({ windows: fromStdin.windows, spend: fromStdin.spend, fetchedAt: now, backoffUntil: 0 });
+    return callback(renderUsage(fromStdin, now));
   }
 
   const cache = readCache();
-  const hasCached = typeof cache.pct === 'number' && typeof cache.fetchedAt === 'number';
-  const windowOpen = hasCached && (!cache.resetsAt || cache.resetsAt > now);
+  const cached = Array.isArray(cache.windows) && typeof cache.fetchedAt === 'number'
+    ? { windows: cache.windows, spend: cache.spend || null }
+    : null;
+  const hasLive = cached ? usageParts(cached.windows, now) !== null : false;
 
   // 2. Fresh shared cache
-  if (windowOpen && now - cache.fetchedAt < CACHE_FRESH_MS) {
-    return callback(formatUsageBar(cache.pct, cache.resetsAt));
+  if (hasLive && now - cache.fetchedAt < CACHE_FRESH_MS) {
+    return callback(renderUsage(cached, now));
   }
 
-  // 4. Stale cache, dimmed with its age; hidden once its window has reset
-  const fallback = () => callback(windowOpen ? formatUsageBar(cache.pct, cache.resetsAt, now - cache.fetchedAt) : null);
+  // 4. Stale cache, dimmed with its age; hidden once every window has reset
+  const fallback = () => callback(hasLive
+    ? renderUsage({ ...cached, staleAgeMs: now - cache.fetchedAt }, now)
+    : null);
 
   // 3. API, unless using an API key or backing off after a failure
   if (IS_API_KEY || (cache.backoffUntil && cache.backoffUntil > now)) {
@@ -219,8 +307,8 @@ function resolveUsage(data, callback) {
       writeCache({ backoffUntil: Date.now() + (result.retryAfterMs || BACKOFF_DEFAULT_MS) });
       return fallback();
     }
-    writeCache({ pct: result.pct, resetsAt: result.resetsAt, fetchedAt: Date.now(), source: 'api', backoffUntil: 0 });
-    callback(formatUsageBar(result.pct, result.resetsAt));
+    writeCache({ windows: result.windows, spend: result.spend, fetchedAt: Date.now(), backoffUntil: 0 });
+    callback(renderUsage(result, Date.now()));
   });
 }
 
@@ -259,7 +347,7 @@ function getEffort(data) {
 }
 
 // Main
-function outputStatus(data, usageBar) {
+function outputStatus(data, usageText) {
   try {
     const model = data?.model?.display_name || 'Claude';
     const dir = data?.workspace?.current_dir || process.cwd();
@@ -276,8 +364,8 @@ function outputStatus(data, usageBar) {
     if (effort) parts.push(`${colors.dim}${effort}${colors.reset}`);
     parts.push(`context: ${contextBar}`);
 
-    if (usageBar) {
-      parts.push(`usage: ${usageBar}`);
+    if (usageText) {
+      parts.push(`usage: ${usageText}`);
     }
 
     if (task) parts.push(`${colors.dim}${task}${colors.reset}`);
@@ -287,10 +375,10 @@ function outputStatus(data, usageBar) {
   }
 }
 
-function outputFallback(usageBar) {
+function outputFallback(usageText) {
   const contextBar = getContextBar(undefined);
   const parts = ['~', 'Claude', `context: ${contextBar}`];
-  if (usageBar) parts.push(`usage: ${usageBar}`);
+  if (usageText) parts.push(`usage: ${usageText}`);
   process.stdout.write(parts.join(' │ '));
 }
 
@@ -301,11 +389,11 @@ function render(input) {
     data = input.length > 0 ? JSON.parse(input) : null;
   } catch (e) {}
 
-  resolveUsage(data, (usageBar) => {
+  resolveUsage(data, (usageText) => {
     if (data) {
-      outputStatus(data, usageBar);
+      outputStatus(data, usageText);
     } else {
-      outputFallback(usageBar);
+      outputFallback(usageText);
     }
     process.exit(0);
   });
