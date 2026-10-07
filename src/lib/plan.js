@@ -104,11 +104,21 @@ function gitApply({ repo, patch, label, base }) {
   // The patch this package applied last time (a previous version's STATUS_LINE install) is kept
   // here; uninstall depends on it, and so does an upgrade from it.
   const keptPath = () => path.join(os.homedir(), '.status-line', label);
+  const treeCarriesPatch = () => run('git', ['-C', repo, 'apply', '--reverse', '--check', patch]).status === 0;
+  const keptIsCurrent = () => exists(keptPath()) && sha256(keptPath()) === sha256(patch);
+  const record = (threeWay) => {
+    // Keep a copy of the exact patch applied so uninstall does not depend on the package.
+    atomicWrite(keptPath(), fs.readFileSync(patch));
+    return { kind: 'git-apply', id: `git-apply:${repo}:${label}`, repo, patch: keptPath(), threeWay };
+  };
   return {
     id: `git-apply:${repo}:${label}`,
     describe: () => `apply ${label} to ${tildify(repo)}`,
-    isSatisfied: () => run('git', ['-C', repo, 'apply', '--reverse', '--check', patch]).status === 0,
+    // Uninstall reverses the kept copy, so a tree that carries the patch while the kept copy is an
+    // older version's (left by an older install) is not done yet.
+    isSatisfied: () => treeCarriesPatch() && keptIsCurrent(),
     apply() {
+      if (treeCarriesPatch()) return record(false);
       let result = applyPatch(repo, patch);
       if (!result.ok) {
         // Upgrading: the checkout still carries the previous version's patch, which conflicts with
@@ -124,9 +134,7 @@ function gitApply({ repo, patch, label, base }) {
         throw new Error(`${label} does not apply to ${tildify(repo)}`
           + `${base ? ` (it was cut against ${base.slice(0, 11)})` : ''}; nothing was changed:\n${result.error}`);
       }
-      // Keep a copy of the exact patch applied so uninstall does not depend on the package.
-      atomicWrite(keptPath(), fs.readFileSync(patch));
-      return { kind: 'git-apply', id: `git-apply:${repo}:${label}`, repo, patch: keptPath(), threeWay: result.threeWay };
+      return record(result.threeWay);
     },
   };
 }

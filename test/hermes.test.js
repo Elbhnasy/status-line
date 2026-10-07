@@ -150,6 +150,35 @@ test('hermes: an upgrade from a previous version reverses the recorded patch fir
   assert.strictEqual(git(repo, 'status', '--porcelain'), '');
 });
 
+test('hermes: a checkout that already carries the patch refreshes a stale recorded copy', { skip }, () => {
+  const { home, repo, env } = setup();
+
+  // An older installer recorded its own patch, but the tree carries the packaged one (applied by
+  // hand, or by a newer status-line before an older one ran). Uninstall reverses the recorded copy,
+  // so it must be brought up to date even though the tree needs no change.
+  git(repo, 'apply', PATCH);
+  const tree = git(repo, 'diff');
+  const kept = path.join(home, '.status-line/hermes-statusbar-claude.patch');
+  fs.mkdirSync(path.dirname(kept), { recursive: true });
+  fs.writeFileSync(kept, '# an older version of the patch\n');
+  fs.writeFileSync(path.join(home, '.status-line/manifest.json'), JSON.stringify({ clis: { hermes: {
+    steps: [{ kind: 'git-apply', id: `git-apply:${repo}:hermes-statusbar-claude.patch`, repo, patch: kept, threeWay: false }],
+    version: '0.1.0',
+  } } }));
+
+  const r = cli(home, ['hermes'], env);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.match(r.stdout, /done: {8}apply hermes-statusbar-claude\.patch/);
+  assert.strictEqual(git(repo, 'diff'), tree, 'the tree already carried the patch; it must not change');
+  assert.ok(fs.readFileSync(kept).equals(fs.readFileSync(PATCH)), 'the recorded copy is the packaged patch');
+
+  assert.match(cli(home, ['hermes'], env).stdout, /Already installed/);
+
+  const u = cli(home, ['hermes', '--uninstall'], env);
+  assert.strictEqual(u.status, 0, u.stderr);
+  assert.strictEqual(git(repo, 'status', '--porcelain'), '');
+});
+
 test('hermes: the packaged patch matches the live checkout', { skip }, () => {
   // Reverse-applies cleanly only while the live checkout carries exactly this change.
   // Read-only: --check never writes.
