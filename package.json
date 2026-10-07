@@ -1,7 +1,7 @@
 {
   "name": "@elbhnasy/status-line",
-  "version": "0.1.0",
-  "description": "Install my existing statuslines for Claude Code, Antigravity CLI (agy), Hermes Agent and OpenCode",
+  "version": "0.2.0",
+  "description": "Install my existing statuslines for Claude Code, Antigravity CLI (agy), Hermes Agent and OpenCode, with real provider usage values",
   "author": "Elbhnasy",
   "repository": {
     "type": "git",
@@ -20,8 +20,8 @@
     "statuslines"
   ],
   "scripts": {
-    "test": "node --test test/",
-    "test:integration": "STATUS_LINE_INTEGRATION=1 node --test test/integration/",
+    "test": "node --test test/*.test.js",
+    "test:integration": "STATUS_LINE_INTEGRATION=1 node --test test/integration/*.test.js",
     "check-drift": "node scripts/check-drift.js",
     "prepublishOnly": "npm test"
   },
