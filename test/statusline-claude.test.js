@@ -17,7 +17,7 @@ const SCRIPT = path.join(ROOT, 'statuslines/claude/statusline.js');
 // sha256 of statuslines/claude/statusline.js as shipped. It is deliberately NO LONGER byte-identical
 // to the original at ~/.claude/hooks/statusline.js: reporting both real rate-limit windows at real
 // precision is the point of this change. This pin only catches accidental edits.
-const PACKAGED_SHA = '80b893255c47d189480bea63bf493e829c12d2960f7fd61e07fdc58e32baa1a3';
+const PACKAGED_SHA = 'fe9df8c034cc640e533bd9b1e147f1f53d21c282e28b4004146c61940f2050da';
 
 test('claude statusline hash is pinned (tripwire only)', () => {
   assert.strictEqual(sha256(SCRIPT), PACKAGED_SHA);
@@ -54,7 +54,7 @@ for (const c of usageCases) {
 
 test('gateway dollars are printed as published, next to the windows', () => {
   const r = runStatusline(SCRIPT, { stdin: cases.claude['usage-gateway-spend-limit'].stdin });
-  assert.match(stripAnsi(r.stdout), /usage: \u2588{4}\u2591{6} 5h 42% \(2h14m\) · wk 5\.0% \(4d\) · \$3\.20\/\$12\.5 m$/);
+  assert.match(stripAnsi(r.stdout), /usage: 5h \u2588{4}\u2591{6} 42% \(2h14m\) · wk 5\.0% \(4d\) · \$3\.20\/\$12\.5 m$/);
 });
 
 test('dollars without a live window still show', () => {

@@ -88,28 +88,32 @@ function formatWindowPercent(pct) {
 
 const BAR_WIDTH = 10;
 const WINDOW_ORDER = ['5h', 'wk', 'opus wk', 'sonnet wk'];
+const WEEKLY_TAKEOVER_PCT = 90;
 
-// The provider's own windows, labelled: `wk 3.0% (1d9h) · 5h 1.0% (4h4m)`. The bar comes from the
-// binding window (the live one with the highest used_percentage); a window whose resets_at has
-// passed is dropped rather than shown stale. Every window keeps its label even when it is the only
-// one left (Claude Code drops expired windows before sending them), so the survivor can never be
-// read as a different window. Returns null when nothing is live.
+// The provider's own windows, labelled: `5h ░░░░░░░░░░ 1.0% (4h4m) · wk 3.0% (1d9h)`. The bar
+// window comes first with the bar between its label and its number: the 5-hour window, unless a
+// weekly window has reached WEEKLY_TAKEOVER_PCT (or the 5-hour one is gone), and then the most-used
+// window. A weekly budget is far larger than a 5-hour one, so a higher weekly percentage does not
+// mean it runs out first until it is nearly spent. A window whose resets_at has passed is dropped
+// rather than shown stale. Every window keeps its label even when it is the only one left (Claude
+// Code drops expired windows before sending them), so the survivor can never be read as a different
+// window. Returns null when nothing is live.
 function usageParts(windows, now) {
   const usable = (windows || []).filter(w => typeof w.pct === 'number' && Number.isFinite(w.pct) && w.pct >= 0);
   const live = usable.filter(w => w.resetsAt == null || w.resetsAt > now);
   if (!live.length) return null;
-  const binding = live.reduce((a, b) => (b.pct > a.pct ? b : a));
-  const rest = live.filter(w => w !== binding)
+  const fiveHour = live.find(w => w.label === '5h');
+  const weeklyNearLimit = live.some(w => w !== fiveHour && w.pct >= WEEKLY_TAKEOVER_PCT);
+  const mostUsed = live.reduce((a, b) => (b.pct > a.pct ? b : a));
+  const barWindow = fiveHour && !weeklyNearLimit ? fiveHour : mostUsed;
+  const rest = live.filter(w => w !== barWindow)
     .sort((a, b) => WINDOW_ORDER.indexOf(a.label) - WINDOW_ORDER.indexOf(b.label));
-  const text = [binding, ...rest].map((w) =>
-    `${w.label} ${formatWindowPercent(w.pct)}%${w.resetsAt ? ` (${formatDuration(w.resetsAt - now)})` : ''}`
-  ).join(' · ');
-  const filled = Math.max(0, Math.min(BAR_WIDTH, Math.round((binding.pct / 100) * BAR_WIDTH)));
-  return {
-    pct: binding.pct,
-    bar: '█'.repeat(filled) + '░'.repeat(BAR_WIDTH - filled),
-    text,
-  };
+  const filled = Math.max(0, Math.min(BAR_WIDTH, Math.round((barWindow.pct / 100) * BAR_WIDTH)));
+  const bar = '█'.repeat(filled) + '░'.repeat(BAR_WIDTH - filled);
+  const reading = (w) => `${formatWindowPercent(w.pct)}%${w.resetsAt ? ` (${formatDuration(w.resetsAt - now)})` : ''}`;
+  const text = [`${barWindow.label} ${bar} ${reading(barWindow)}`, ...rest.map(w => `${w.label} ${reading(w)}`)]
+    .join(' · ');
+  return { pct: barWindow.pct, text };
 }
 
 // The full `usage:` value: the window segment, the gateway's dollars when it published any, and a
@@ -122,11 +126,11 @@ function renderUsage(state, now) {
       ? `${colors.dim}${state.spend}${colors.reset}` : null;
   }
   if (state.staleAgeMs !== undefined) {
-    return `${colors.dim}${parts.bar} ${parts.text} · ${formatDuration(state.staleAgeMs)} ago${colors.reset}`;
+    return `${colors.dim}${parts.text} · ${formatDuration(state.staleAgeMs)} ago${colors.reset}`;
   }
   const color = getUsageColor(parts.pct);
   const spend = state.spend ? `${colors.dim} · ${state.spend}${colors.reset}` : '';
-  return `${color}${parts.bar} ${parts.text}${colors.reset}${spend}`;
+  return `${color}${parts.text}${colors.reset}${spend}`;
 }
 
 const WINDOW_KEYS = [['5h', 'five_hour'], ['wk', 'seven_day']];

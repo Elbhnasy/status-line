@@ -76,19 +76,20 @@ for (const [id, c] of Object.entries(cases.agy)) {
 test('both buckets of the group are shown, at the published precision', () => {
   const r = withCache({ fetchedAt: NOW - MIN, groups: groups({ gemini: 0.9844, geminiWeekly: 0.9974 }) });
   assert.strictEqual(r.stdout,
-    `${golden['gemini-full']} │ usage: ${ESC}[32m${'\u2591'.repeat(10)} 5h 1.6% (2h14m) · wk 0.3% (7d)${ESC}[0m`);
+    `${golden['gemini-full']} │ usage: ${ESC}[32m5h ${'\u2591'.repeat(10)} 1.6% (2h14m) · wk 0.3% (7d)${ESC}[0m`);
 });
 
 test('the weekly bucket is shown even when it is the only one that moved', () => {
   const r = withCache({ fetchedAt: NOW - MIN, groups: groups({ gemini: 1, geminiWeekly: 0.5 }) });
-  assert.match(stripAnsi(r.stdout), /usage: \u2588{5}\u2591{5} wk 50% \(7d\) · 5h 0\.0% \(2h14m\)$/);
+  assert.match(stripAnsi(r.stdout), /usage: 5h \u2591{10} 0\.0% \(2h14m\) · wk 50% \(7d\)$/);
+  assert.ok(r.stdout.includes(`usage: ${ESC}[32m`), r.stdout);
 });
 
 test('claude and gpt models use the Claude and GPT group', () => {
   const cache = { fetchedAt: NOW - MIN, groups: groups({ gemini: 1, thirdParty: 0.2 }) };
   for (const id of ['claude-model', 'gpt-model']) {
     const r = withCache(cache, cases.agy[id].stdin);
-    assert.match(stripAnsi(r.stdout), /usage: \u2588{8}\u2591{2} 5h 80% \(2h14m\) · wk 50% \(7d\)$/, id);
+    assert.match(stripAnsi(r.stdout), /usage: 5h \u2588{8}\u2591{2} 80% \(2h14m\) · wk 50% \(7d\)$/, id);
     assert.ok(r.stdout.includes(`usage: ${ESC}[38;5;208m`), id);
   }
 });
@@ -103,7 +104,7 @@ test('usage colors follow the existing thresholds', () => {
 
 test('missing remaining_fraction (proto3 omits zero) means fully used', () => {
   const r = withCache({ fetchedAt: NOW - MIN, groups: groups({ gemini: null }) });
-  assert.match(stripAnsi(r.stdout), /usage: \u2588{10} 5h 100% \(2h14m\)/);
+  assert.match(stripAnsi(r.stdout), /usage: 5h \u2588{10} 100% \(2h14m\)/);
 });
 
 test('unknown model family hides the usage segment', () => {
@@ -115,12 +116,12 @@ test('unknown model family hides the usage segment', () => {
 test('a cache older than 10 minutes is dimmed with its age', () => {
   const r = withCache({ fetchedAt: NOW - 25 * MIN, groups: groups({ gemini: 0.7 }) });
   assert.strictEqual(r.stdout,
-    `${golden['gemini-full']} │ usage: ${ESC}[2m\u2588\u2588\u2588\u2591\u2591\u2591\u2591\u2591\u2591\u2591 5h 30% (2h14m) · wk 10% (7d) · 25m ago${ESC}[0m`);
+    `${golden['gemini-full']} │ usage: ${ESC}[2m5h \u2588\u2588\u2588\u2591\u2591\u2591\u2591\u2591\u2591\u2591 30% (2h14m) · wk 10% (7d) · 25m ago${ESC}[0m`);
 });
 
 test('a window past its reset is dropped, the live one stays', () => {
   const r = withCache({ fetchedAt: NOW - MIN, groups: groups({ gemini: 0.7, reset: NOW - MIN }) });
-  assert.match(stripAnsi(r.stdout), /usage: \u2588\u2591{9} wk 10% \(7d\)$/);
+  assert.match(stripAnsi(r.stdout), /usage: wk \u2588\u2591{9} 10% \(7d\)$/);
 });
 
 test('nothing live hides the segment', () => {
@@ -139,7 +140,7 @@ test('fallback line (no stdin model) uses the model from agy settings.json', () 
       '.gemini/antigravity-cli/settings.json': { model: 'Gemini 3.8 Flash (High)' },
     },
   });
-  assert.match(stripAnsi(r.stdout), /usage: \u2588\u2591{9} 5h 10% \(2h14m\) · wk 10% \(7d\)$/);
+  assert.match(stripAnsi(r.stdout), /usage: 5h \u2588\u2591{9} 10% \(2h14m\) · wk 10% \(7d\)$/);
 });
 
 // The shared real-usage contract: the same windows must render identically here and in Claude Code.

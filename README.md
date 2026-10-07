@@ -58,9 +58,12 @@ What the segment shows, in every CLI:
 2. **Every window that source publishes**, each labelled: the 5-hour **and** the weekly limit, not
    just one of them. A window keeps its label even when it is the only one live, so a survivor can
    never be mistaken for a different window.
-3. **The bar is drawn from the binding window** (the live window with the highest usage) and its
-   number is always printed next to it. On a narrow terminal the secondary windows are given up
-   before the whole segment is.
+3. **The bar follows the 5-hour window** until a weekly window reaches 90%; from then on it follows
+   the most-used window. A weekly budget is far larger than a 5-hour one, so a higher weekly
+   percentage does not mean it runs out first until it is nearly spent. The bar's window is printed
+   first, with its label in front of the bar and its number after it. (Hermes never gives the bar
+   to a model-scoped week such as `opus wk`, since it cannot exhaust the account.) On a narrow
+   terminal the secondary windows are given up before the whole segment is.
 4. **Real precision:** one decimal below 10%, an integer at or above, and the integer always comes
    from the published number. `1.5603%` reads `1.6%` (never `2%`), `0.26%` reads `0.3%` (never
    `0%`), and `12.46%` reads `12%` (never `13%`).
@@ -68,7 +71,8 @@ What the segment shows, in every CLI:
    the segment disappears (or, in Hermes, falls back to the session's real token total: `Σ790K tok`).
 6. **Nothing is shown stale without saying so:** an unrefreshed value is dimmed with its age.
 
-Examples: `usage: ░░░░░░░░░░ wk 3.0% (1d9h) · 5h 1.0% (4h4m)`.
+Examples: `usage: 5h ░░░░░░░░░░ 1.0% (4h4m) · wk 3.0% (1d9h)`, and once the week is nearly
+spent `usage: wk █████████░ 92% (1d9h) · 5h 20% (2h14m)`.
 
 ### Agy usage bar
 

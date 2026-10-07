@@ -76,13 +76,20 @@ test('stdin dollars are taken as published and survive without a window', () => 
   assert.strictEqual(usageFromStdin({ rate_limits: { five_hour: { used_percentage: null } } }), null);
 });
 
-test('usageParts labels every window, binds the bar to the highest, and drops expired ones', () => {
+test('usageParts labels every window, keeps the bar on 5h until a week nears its limit, and drops expired ones', () => {
   const both = usageParts([
     { label: '5h', pct: 1.0, resetsAt: NOW + 4 * HOUR + 4 * 60000 },
     { label: 'wk', pct: 3.0, resetsAt: NOW + 33 * HOUR },
   ], NOW);
-  assert.strictEqual(both.bar, '░'.repeat(10));
-  assert.strictEqual(both.text, 'wk 3.0% (1d9h) · 5h 1.0% (4h4m)');
+  assert.deepStrictEqual(both, { pct: 1.0, text: '5h ░░░░░░░░░░ 1.0% (4h4m) · wk 3.0% (1d9h)' });
+
+  // A model-scoped week counts toward the takeover like the account week.
+  const opusNearLimit = usageParts([
+    { label: '5h', pct: 30, resetsAt: NOW + HOUR },
+    { label: 'wk', pct: 40, resetsAt: NOW + 33 * HOUR },
+    { label: 'opus wk', pct: 91, resetsAt: NOW + 33 * HOUR },
+  ], NOW);
+  assert.deepStrictEqual(opusNearLimit, { pct: 91, text: 'opus wk █████████░ 91% (1d9h) · 5h 30% (1h) · wk 40% (1d9h)' });
 
   // A single live window keeps its label: Claude Code drops expired windows before sending them,
   // so the survivor must not read as the 5-hour window.
@@ -90,8 +97,7 @@ test('usageParts labels every window, binds the bar to the highest, and drops ex
     { label: '5h', pct: 88, resetsAt: NOW - 60000 },
     { label: 'wk', pct: 41.2, resetsAt: NOW + 4 * 24 * HOUR },
   ], NOW);
-  assert.strictEqual(onlyWeek.text, 'wk 41% (4d)');
-  assert.strictEqual(onlyWeek.bar, '█'.repeat(4) + '░'.repeat(6));
+  assert.deepStrictEqual(onlyWeek, { pct: 41.2, text: 'wk ████░░░░░░ 41% (4d)' });
 
   assert.strictEqual(usageParts([{ label: '5h', pct: 88, resetsAt: NOW - 60000 }], NOW), null);
   assert.strictEqual(usageParts([], NOW), null);

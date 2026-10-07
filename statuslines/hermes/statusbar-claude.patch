@@ -18,7 +18,7 @@ index f1ae4fa74c575c3f9eb6a7528113e9f4197f8753..7a316b3a2685fbc7687fe283ba43c276
      )
      details: list[str] = []
 diff --git a/hermes_cli/cli_status_bar_mixin.py b/hermes_cli/cli_status_bar_mixin.py
-index 47dac228a27c617fa99c4563d973e14d30fcaad8..204465fcaa392ca4c607265c687e6eec5026e4b3 100644
+index 47dac228a27c617fa99c4563d973e14d30fcaad8..27ed5bf109257f87cbf76762ff1b335991935792 100644
 --- a/hermes_cli/cli_status_bar_mixin.py
 +++ b/hermes_cli/cli_status_bar_mixin.py
 @@ -8,6 +8,7 @@ inside each method (``from cli import ...``) — never at module load time (impo
@@ -199,7 +199,7 @@ index 47dac228a27c617fa99c4563d973e14d30fcaad8..204465fcaa392ca4c607265c687e6eec
 +        for name in DROP_ORDER:
 +            if _total() <= width:
 +                break
-+            # Before giving up the ``usage`` segment, fall back to the binding window alone: the
++            # Before giving up the ``usage`` segment, fall back to the bar window alone: the
 +            # number that matters survives a narrow terminal, the secondary window is what goes.
 +            if name == "usage" and not shrunk_usage_done and shrunk_usage is not None:
 +                shrunk_usage_done = True
@@ -307,10 +307,10 @@ index d3d1a2a96d232ec8d3f9583cea6d8cd58ddb3ddd..49d18036b6eb5c3928da9bd4794af598
  
  def test_read_only_fetch_remembered_under_identity_slot(monkeypatch, tmp_path):
 diff --git a/tests/hermes_cli/test_cli_status_bar.py b/tests/hermes_cli/test_cli_status_bar.py
-index 738f3c0c436e4f2f410df82fd28d2a0922794b45..ab76f5f42dfcc7d8adbcab001a7e53f216475752 100644
+index 738f3c0c436e4f2f410df82fd28d2a0922794b45..2ba2d371672b84bc7bf7f9632d4d4a12e03b21e4 100644
 --- a/tests/hermes_cli/test_cli_status_bar.py
 +++ b/tests/hermes_cli/test_cli_status_bar.py
-@@ -522,3 +522,233 @@ class TestCacheHitBaselineReset:
+@@ -522,3 +522,234 @@ class TestCacheHitBaselineReset:
          with patch.object(cli_mod, "CLI_CONFIG", {"display": {"status_bar": {"fields": ["model", "duration"]}}}):
              text = cli_obj._build_status_bar_text(width=80)
          assert "weekly-digest" not in text
@@ -418,7 +418,8 @@ index 738f3c0c436e4f2f410df82fd28d2a0922794b45..ab76f5f42dfcc7d8adbcab001a7e53f2
 +
 +        text = self._text(cli_obj, 120)
 +        assert "usage: " in text
-+        assert "wk 3.0% (" in text and "5h 1.0% (" in text
++        assert "5h \u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591 1.0% (" in text
++        assert "wk 3.0% (" in text
 +        assert "Σ" not in text
 +
 +    def test_no_provider_windows_falls_back_to_the_session_token_total(self, monkeypatch, tmp_path):
@@ -427,8 +428,8 @@ index 738f3c0c436e4f2f410df82fd28d2a0922794b45..ab76f5f42dfcc7d8adbcab001a7e53f2
 +        text = self._text(cli_obj, 120)
 +        assert text.endswith("usage: Σ790K tok")
 +
-+    def test_narrow_terminal_keeps_the_binding_window_number(self, monkeypatch, tmp_path):
-+        """The long real-window text must degrade to the binding window, not vanish."""
++    def test_narrow_terminal_keeps_the_bar_window_number(self, monkeypatch, tmp_path):
++        """The long real-window text must degrade to the bar window, not vanish."""
 +        from datetime import datetime, timedelta, timezone
 +
 +        from agent.account_usage import AccountUsageWindow
@@ -440,8 +441,8 @@ index 738f3c0c436e4f2f410df82fd28d2a0922794b45..ab76f5f42dfcc7d8adbcab001a7e53f2
 +        monkeypatch.setattr(cli_obj, "_account_usage_windows", lambda: list(windows))
 +
 +        text = self._text(cli_obj, 100)
-+        assert "usage: " in text and "wk 41%" in text, text
-+        assert "5h " not in text.split("usage: ")[1], text        # the secondary window is what goes
++        assert "usage: " in text and "5h " in text and "1.0%" in text, text
++        assert "wk " not in text.split("usage: ")[1], text        # the secondary window is what goes
 +        assert cli_obj_width(cli_mod, text) <= 100
 +
 +
@@ -546,10 +547,10 @@ index 738f3c0c436e4f2f410df82fd28d2a0922794b45..ab76f5f42dfcc7d8adbcab001a7e53f2
 +        assert cli_obj._status_bar_display_width(text) <= 120
 diff --git a/hermes_cli/status_bar_claude.py b/hermes_cli/status_bar_claude.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..273a2e4d3fbf13cb75973202912cd043958cd712
+index 0000000000000000000000000000000000000000..5796cb6ad20b83fa7417dbc776817afb4422e077
 --- /dev/null
 +++ b/hermes_cli/status_bar_claude.py
-@@ -0,0 +1,195 @@
+@@ -0,0 +1,210 @@
 +"""Pure helpers for the Claude-Code-style status bar (``display.status_bar.style: claude``).
 +
 +The layout implemented by ``cli_status_bar_mixin._claude_status_bar_segments`` is::
@@ -594,8 +595,13 @@ index 0000000000000000000000000000000000000000..273a2e4d3fbf13cb75973202912cd043
 +WINDOW_LABELS = {"Current session": "5h", "Current week": "wk",
 +                 "Opus week": "opus wk", "Sonnet week": "sonnet wk"}
 +
-+#: Tie-break order for the windows that are not the binding one.
++#: Tie-break order for the windows that do not carry the bar.
 +WINDOW_ORDER = ("5h", "wk", "opus wk", "sonnet wk")
++
++#: Short labels of the 5-hour window (Anthropic's "Current session", Codex's "Session"): it carries
++#: the bar until a longer window reaches ``WEEKLY_TAKEOVER_PCT``.
++SHORT_WINDOWS = ("5h", "session")
++WEEKLY_TAKEOVER_PCT = 90
 +
 +
 +def _short_window_label(label) -> str:
@@ -678,16 +684,19 @@ index 0000000000000000000000000000000000000000..273a2e4d3fbf13cb75973202912cd043
 +    ``windows`` are ``agent.account_usage.AccountUsageWindow``-shaped. The segment shows every live
 +    window the provider published, labelled, at real precision — neither Anthropic nor Google
 +    publishes a token or dollar magnitude for a subscription window, so the fraction *is* the real
-+    value. The bar is drawn from the binding window (the live window with the highest
-+    ``used_percent`` among account-scoped windows); model-scoped windows (``Opus week``) are shown
-+    but never set the bar, because they cannot exhaust the account. A window whose ``reset_at`` has
-+    passed is dropped rather than rendered stale; with no live window left the caller shows a real
-+    absolute value instead.
++    value. The bar window comes first, with the bar between its label and its number
++    (``5h ░░░░░░░░░░ 1.0% (4h7m) · wk 3.0% (1d9h)``): the 5-hour window, unless a longer
++    account-scoped window has reached ``WEEKLY_TAKEOVER_PCT`` (or there is no live 5-hour window),
++    and then the account-scoped window with the highest ``used_percent``. A weekly budget is far
++    larger than a 5-hour one, so a higher weekly percentage does not mean it runs out first until it
++    is nearly spent. Model-scoped windows (``Opus week``) are shown but never take the bar, because
++    they cannot exhaust the account. A window whose ``reset_at`` has passed is dropped rather than
++    rendered stale; with no live window left the caller shows a real absolute value instead.
 +
 +    Every window keeps its label even when it is the only one (a provider that publishes a single
 +    window, or whose others expired), so the survivor can never be mistaken for a different window.
-+    ``binding_only`` renders just the binding window: the narrow-terminal form the caller falls back
-+    to before giving up the segment entirely.
++    ``binding_only`` renders just the bar window: the narrow-terminal form the caller falls back to
++    before giving up the segment entirely.
 +    """
 +    live = []
 +    for window in windows or ():
@@ -707,18 +716,25 @@ index 0000000000000000000000000000000000000000..273a2e4d3fbf13cb75973202912cd043
 +    if not live:
 +        return None, None
 +    account = [(w, used) for w, used in live if getattr(w, "scope", "account") != "model"] or live
-+    binding, bar_pct = max(account, key=lambda pair: pair[1])
++    short = next((pair for pair in account
++                  if _short_window_label(getattr(pair[0], "label", "")) in SHORT_WINDOWS), None)
++    if short is not None and all(used < WEEKLY_TAKEOVER_PCT
++                                 for w, used in account if w is not short[0]):
++        bar_window, bar_pct = short
++    else:
++        bar_window, bar_pct = max(account, key=lambda pair: pair[1])
 +    order = {name: index for index, name in enumerate(WINDOW_ORDER)}
-+    rest = sorted(((w, used) for w, used in live if w is not binding),
++    rest = sorted(((w, used) for w, used in live if w is not bar_window),
 +                  key=lambda pair: order.get(_short_window_label(getattr(pair[0], "label", "")), 99))
-+    shown = [(binding, bar_pct)] if binding_only else [(binding, bar_pct)] + rest
++    shown = [(bar_window, bar_pct)] if binding_only else [(bar_window, bar_pct)] + rest
 +    parts = []
-+    for window, used in shown:
++    for index, (window, used) in enumerate(shown):
 +        label = _short_window_label(getattr(window, "label", ""))
++        bar = f"{render_bar(bar_pct, width)} " if index == 0 else ""
 +        seconds = _seconds_until(getattr(window, "reset_at", None), now)
-+        parts.append(f"{label} {format_window_percent(used)}%"
++        parts.append(f"{label} {bar}{format_window_percent(used)}%"
 +                     + (f" ({format_window_duration(seconds)})" if seconds is not None else ""))
-+    return bar_pct, f"{render_bar(bar_pct, width)} {parts[0]}" + "".join(f" · {p}" for p in parts[1:])
++    return bar_pct, " · ".join(parts)
 +
 +
 +def cwd_label(path) -> str:
@@ -747,10 +763,10 @@ index 0000000000000000000000000000000000000000..273a2e4d3fbf13cb75973202912cd043
 +    return requested_effort(reasoning_config) or default
 diff --git a/tests/hermes_cli/test_status_bar_claude.py b/tests/hermes_cli/test_status_bar_claude.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..2ccb2d7e16243b79a7e7cfff530f63322c623249
+index 0000000000000000000000000000000000000000..fe5ae93f99e422bc667edecba74d600532e86e80
 --- /dev/null
 +++ b/tests/hermes_cli/test_status_bar_claude.py
-@@ -0,0 +1,152 @@
+@@ -0,0 +1,165 @@
 +"""Unit tests for the pure Claude-style status-bar helpers (no live HermesCLI)."""
 +
 +from datetime import datetime, timedelta, timezone
@@ -782,7 +798,8 @@ index 0000000000000000000000000000000000000000..2ccb2d7e16243b79a7e7cfff530f6332
 +
 +# --- real usage windows -------------------------------------------------------------------------
 +# The usage segment reports what the provider published: every window, labelled, at real precision,
-+# with its reset countdown. The bar is drawn from the binding (most-used) account-scoped window.
++# with its reset countdown. The bar stays on the 5-hour window until a longer account-scoped
++# window reaches 90%; then the most-used account-scoped window takes it.
 +
 +NOW = datetime(2026, 10, 7, 7, 0, tzinfo=timezone.utc)
 +EPOCH = NOW.timestamp()
@@ -793,48 +810,60 @@ index 0000000000000000000000000000000000000000..2ccb2d7e16243b79a7e7cfff530f6332
 +                              reset_at=NOW + timedelta(hours=hours), scope=scope)
 +
 +
-+def test_usage_windows_label_orders_by_binding_window_and_labels_each():
-+    windows = [_w("Current session", 1.0, 4 + 7 / 60), _w("Current week", 3.0, 33)]
++def test_usage_windows_label_puts_the_bar_on_5h_while_the_week_is_below_the_takeover():
++    windows = [_w("Current session", 1.0, 4 + 7 / 60), _w("Current week", 89.0, 33)]
 +    assert sb.usage_windows_label(windows, EPOCH) == (
-+        3.0, "\u2591" * 10 + " wk 3.0% (1d9h) \u00b7 5h 1.0% (4h7m)")
++        1.0, "5h " + "\u2591" * 10 + " 1.0% (4h7m) \u00b7 wk 89% (1d9h)")
++
++
++def test_usage_windows_label_week_at_the_takeover_takes_the_bar():
++    windows = [_w("Current session", 20.0, 2 + 14 / 60), _w("Current week", 90.0, 48)]
++    assert sb.usage_windows_label(windows, EPOCH) == (
++        90.0, "wk " + "\u2588" * 9 + "\u2591" + " 90% (2d) \u00b7 5h 20% (2h14m)")
++
++
++def test_usage_windows_label_past_the_takeover_the_more_used_window_keeps_the_bar():
++    windows = [_w("Current session", 95.0, 2 + 14 / 60), _w("Current week", 92.0, 48)]
++    assert sb.usage_windows_label(windows, EPOCH) == (
++        95.0, "5h " + "\u2588" * 10 + " 95% (2h14m) \u00b7 wk 92% (2d)")
 +
 +
 +def test_usage_windows_label_keeps_one_decimal_below_ten():
 +    windows = [_w("Current session", 1.5603, 4 + 33 / 60), _w("Current week", 0.2601, 6 * 24 + 23)]
 +    assert sb.usage_windows_label(windows, EPOCH)[1] == \
-+        "\u2591" * 10 + " 5h 1.6% (4h33m) \u00b7 wk 0.3% (6d23h)"
++        "5h " + "\u2591" * 10 + " 1.6% (4h33m) \u00b7 wk 0.3% (6d23h)"
 +
 +
 +def test_usage_windows_label_bar_ignores_model_scoped_windows():
 +    windows = [_w("Current session", 1.0, 4.0), _w("Current week", 3.0, 33.0),
-+               _w("Opus week", 62.8, 96.0, scope="model")]
++               _w("Opus week", 96.8, 96.0, scope="model")]
 +    assert sb.usage_windows_label(windows, EPOCH) == (
-+        3.0, "\u2591" * 10 + " wk 3.0% (1d9h) \u00b7 5h 1.0% (4h) \u00b7 opus wk 63% (4d)")
++        1.0, "5h " + "\u2591" * 10 + " 1.0% (4h) \u00b7 wk 3.0% (1d9h) \u00b7 opus wk 97% (4d)")
 +
 +
 +def test_usage_windows_label_drops_windows_past_their_reset():
 +    windows = [_w("Current session", 88.0, -1 / 60), _w("Current week", 41.2, 96.0)]
 +    assert sb.usage_windows_label(windows, EPOCH) == (
-+        41.2, "\u2588\u2588\u2588\u2588" + "\u2591" * 6 + " wk 41% (4d)")
++        41.2, "wk " + "\u2588\u2588\u2588\u2588" + "\u2591" * 6 + " 41% (4d)")
 +
 +
 +def test_usage_windows_label_single_window_keeps_its_label():
 +    # The provider may publish only one window (or the others expired): the label stays, so the
 +    # survivor can never be read as a different window.
 +    assert sb.usage_windows_label([_w("Current session", 42.0, 2 + 14 / 60)], EPOCH) == (
-+        42.0, "\u2588\u2588\u2588\u2588" + "\u2591" * 6 + " 5h 42% (2h14m)")
++        42.0, "5h " + "\u2588\u2588\u2588\u2588" + "\u2591" * 6 + " 42% (2h14m)")
 +
 +
-+def test_usage_windows_label_binding_only_keeps_the_number_and_drops_the_rest():
++def test_usage_windows_label_binding_only_keeps_the_bar_window_and_drops_the_rest():
 +    windows = [_w("Current session", 1.0, 4 + 7 / 60), _w("Current week", 41.2, 96.0)]
 +    assert sb.usage_windows_label(windows, EPOCH, binding_only=True) == (
-+        41.2, "\u2588\u2588\u2588\u2588" + "\u2591" * 6 + " wk 41% (4d)")
++        1.0, "5h " + "\u2591" * 10 + " 1.0% (4h7m)")
 +
 +
 +def test_usage_windows_label_derives_codex_labels():
-+    windows = [_w("Session", 100.0, 25 / 60), _w("Weekly", 41.0, 5 * 24)]
++    windows = [_w("Session", 30.0, 25 / 60), _w("Weekly", 41.0, 5 * 24)]
 +    assert sb.usage_windows_label(windows, EPOCH)[1] == \
-+        "\u2588" * 10 + " session 100% (25m) \u00b7 weekly 41% (5d)"
++        "session " + "\u2588" * 3 + "\u2591" * 7 + " 30% (25m) \u00b7 weekly 41% (5d)"
 +
 +
 +def test_usage_windows_label_without_windows_is_none():
@@ -843,7 +872,7 @@ index 0000000000000000000000000000000000000000..2ccb2d7e16243b79a7e7cfff530f6332
 +
 +def test_usage_windows_label_counts_a_missing_reset_as_live():
 +    window = AccountUsageWindow(label="Current session", used_percent=7.0, reset_at=None)
-+    assert sb.usage_windows_label([window], EPOCH) == (7.0, "\u2588" + "\u2591" * 9 + " 5h 7.0%")
++    assert sb.usage_windows_label([window], EPOCH) == (7.0, "5h \u2588" + "\u2591" * 9 + " 7.0%")
 +
 +
 +def test_window_duration_rule():
