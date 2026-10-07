@@ -1,12 +1,14 @@
 #!/usr/bin/env node
 // Antigravity CLI statusline (adapted from ~/.claude/hooks/statusline.js)
-// Shows: directory | model | context usage | API usage (5-hour limit) | current task
+// Shows: directory | model | context usage | API usage (quota windows) | current task
 // Auto-detects API key vs subscription usage
 // https://github.com/TahaSabir0/claude-statusline
 //
-// Usage bar (status-line package): the 5-hour quota of the active model's group, from
-// `agy -p "/usage" --output-format json`. That call takes ~5s, so the bar only reads a cache
-// that a detached `statusline.js --refresh-usage` keeps fresh in the background.
+// Usage segment (status-line package): both quota windows of the active model's group — the 5-hour
+// and the weekly bucket — from `agy -p "/usage" --output-format json`. The payload carries no token
+// or dollar magnitude anywhere, so the fraction it publishes is the real value and is shown at its
+// own precision, never rounded to a whole percentage. That call takes ~5s, so the segment only reads
+// a cache that a detached `statusline.js --refresh-usage` keeps fresh in the background.
 
 const fs = require('fs');
 const path = require('path');
@@ -26,7 +28,7 @@ const AGY_DIR = path.join(os.homedir(), '.gemini', 'antigravity-cli');
 const AGY_USAGE_CACHE_FILE = path.join(AGY_DIR, 'cache', 'status-line-usage.json');
 const AGY_BIN = process.env.STATUS_LINE_AGY_BIN || 'agy';
 const AGY_REFRESH_MS = 60000; // Refresh in the background once the cache is older than 1 min
-const AGY_STALE_MS = 600000;  // Dim the bar and show its age once older than 10 min
+const AGY_STALE_MS = 600000;  // Dim the segment and show its age once older than 10 min
 
 // ANSI color codes
 const colors = {
@@ -215,26 +217,61 @@ function getUsageWithCache(callback) {
   });
 }
 
+// 4d / 1d9h / 2h14m / 25m — zero components are dropped, days keep the weekly window readable.
 function formatDuration(ms) {
   const totalMins = Math.max(0, Math.floor(ms / 60000));
-  const hours = Math.floor(totalMins / 60);
+  const totalHours = Math.floor(totalMins / 60);
+  const days = Math.floor(totalHours / 24);
+  const hours = totalHours % 24;
   const mins = totalMins % 60;
-  return hours > 0 ? `${hours}h${mins}m` : `${mins}m`;
+  if (days > 0) return hours > 0 ? `${days}d${hours}h` : `${days}d`;
+  if (totalHours > 0) return mins > 0 ? `${totalHours}h${mins}m` : `${totalHours}h`;
+  return `${totalMins}m`;
 }
 
-// Same bar as the usage bar above. staleAgeMs marks a value we could not refresh.
-function formatAgyUsageBar(pct, resetsAtMs, staleAgeMs) {
-  const percentage = Math.max(0, Math.min(100, Math.round(pct)));
-  const barWidth = 10;
-  const filledWidth = Math.round((percentage / 100) * barWidth);
-  const bar = '█'.repeat(filledWidth) + '░'.repeat(barWidth - filledWidth);
-  const timeStr = resetsAtMs ? ` (${formatDuration(resetsAtMs - Date.now())})` : '';
+// One decimal below 10% (1.5603 -> "1.6"), an integer at or above (41.2 -> "41"): the precision the
+// vendor published, never rounded away (1.5603% is not 2%). The value is normalised to one decimal
+// first, so a float artifact (1 - 0.9 = 0.0999… -> 9.999999999999998%) still prints "10", not "10.0".
+function formatWindowPercent(pct) {
+  const value = Math.round(pct * 10) / 10;
+  return value < 10 ? value.toFixed(1) : String(Math.round(value));
+}
 
-  if (staleAgeMs !== undefined) {
-    return `${colors.dim}${bar} ${percentage}%${timeStr} · ${formatDuration(staleAgeMs)} ago${colors.reset}`;
+const BAR_WIDTH = 10;
+const WINDOW_ORDER = ['5h', 'wk'];
+
+// The published windows, labelled: `5h 1.6% (4h33m) · wk 0.3% (6d23h)`. The bar comes from the
+// binding window (the live one with the higher usage); a window whose reset_time has passed is
+// dropped rather than shown stale. Returns null when nothing is live.
+function usageParts(windows, now) {
+  const usable = (windows || []).filter(w => typeof w.pct === 'number' && Number.isFinite(w.pct) && w.pct >= 0);
+  const live = usable.filter(w => w.resetsAt == null || w.resetsAt > now);
+  if (!live.length) return null;
+  const binding = live.reduce((a, b) => (b.pct > a.pct ? b : a));
+  const rest = live.filter(w => w !== binding)
+    .sort((a, b) => WINDOW_ORDER.indexOf(a.label) - WINDOW_ORDER.indexOf(b.label));
+  const labelled = usable.length > 1;
+  const text = [binding, ...rest].map((w) => {
+    const label = labelled ? `${w.label} ` : '';
+    return `${label}${formatWindowPercent(w.pct)}%${w.resetsAt ? ` (${formatDuration(w.resetsAt - now)})` : ''}`;
+  }).join(' · ');
+  const filled = Math.max(0, Math.min(BAR_WIDTH, Math.round((binding.pct / 100) * BAR_WIDTH)));
+  return {
+    pct: binding.pct,
+    bar: '\u2588'.repeat(filled) + '\u2591'.repeat(BAR_WIDTH - filled),
+    text,
+  };
+}
+
+// The full `usage:` value, dimmed with its age when the numbers could not be refreshed.
+function renderUsage(state, now) {
+  const parts = state && usageParts(state.windows, now);
+  if (!parts) return null;
+  if (state.staleAgeMs !== undefined) {
+    return `${colors.dim}${parts.bar} ${parts.text} · ${formatDuration(state.staleAgeMs)} ago${colors.reset}`;
   }
-  const color = getUsageColor(percentage);
-  return `${color}${bar} ${percentage}%${colors.reset}${colors.dim}${timeStr}${colors.reset}`;
+  const color = getUsageColor(parts.pct);
+  return `${color}${parts.bar} ${parts.text}${colors.reset}`;
 }
 
 function readAgyUsageCache() {
@@ -320,7 +357,24 @@ function findAgyQuotaGroup(groups, modelName) {
     || null;
 }
 
-// Resolve the agy usage bar from the cache; hidden until the first refresh lands.
+// Both buckets of the group, as the vendor published them. The payload has no absolute magnitude
+// for a quota window, so the fraction is the value.
+const AGY_BUCKETS = [['5h', '5h'], ['wk', 'weekly']];
+
+function groupWindows(group) {
+  const windows = [];
+  for (const [label, window] of AGY_BUCKETS) {
+    const bucket = group?.buckets?.find(b => b?.window === window);
+    if (!bucket) continue;
+    // remaining_fraction is omitted (proto3 omitempty) when nothing is left.
+    const remaining = typeof bucket.remaining_fraction === 'number' ? bucket.remaining_fraction : 0;
+    const resetsAt = Date.parse(bucket.reset_time);
+    windows.push({ label, pct: (1 - remaining) * 100, resetsAt: Number.isFinite(resetsAt) ? resetsAt : null });
+  }
+  return windows;
+}
+
+// Resolve the agy usage segment from the cache; hidden until the first refresh lands.
 function getAgyUsage(data, callback) {
   const now = Date.now();
   const cache = readAgyUsageCache();
@@ -328,16 +382,10 @@ function getAgyUsage(data, callback) {
 
   if (!Array.isArray(cache.groups) || typeof cache.fetchedAt !== 'number') return callback(null);
   const group = findAgyQuotaGroup(cache.groups, getAgyModelName(data));
-  const bucket = group?.buckets?.find(b => b?.window === '5h');
-  if (!bucket) return callback(null);
-
-  const resetsAt = Date.parse(bucket.reset_time);
-  if (Number.isFinite(resetsAt) && resetsAt <= now) return callback(null); // window reset since
-  // remaining_fraction is omitted (proto3 omitempty) when nothing is left.
-  const remaining = typeof bucket.remaining_fraction === 'number' ? bucket.remaining_fraction : 0;
+  const windows = groupWindows(group);
+  if (!windows.length) return callback(null);
   const age = now - cache.fetchedAt;
-  callback(formatAgyUsageBar((1 - remaining) * 100, Number.isFinite(resetsAt) ? resetsAt : null,
-    age > AGY_STALE_MS ? age : undefined));
+  callback(renderUsage({ windows, staleAgeMs: age > AGY_STALE_MS ? age : undefined }, now));
 }
 
 function getCurrentTask(sessionId) {
@@ -375,7 +423,7 @@ function getEffort(data) {
 }
 
 // Main
-function outputStatus(data, usageBar) {
+function outputStatus(data, usageText) {
   try {
     const model = data?.model?.display_name || 'Claude';
     const dir = data?.workspace?.current_dir || process.cwd();
@@ -390,8 +438,8 @@ function outputStatus(data, usageBar) {
     parts.push(model);
     parts.push(`context: ${contextBar}`);
 
-    if (usageBar) {
-      parts.push(`usage: ${usageBar}`);
+    if (usageText) {
+      parts.push(`usage: ${usageText}`);
     }
 
     process.stdout.write(parts.join(' \u2502 '));
@@ -400,10 +448,10 @@ function outputStatus(data, usageBar) {
   }
 }
 
-function outputFallback(usageBar) {
+function outputFallback(usageText) {
   const contextBar = getContextBar(undefined);
   const parts = ['~', 'Claude', `context: ${contextBar}`];
-  if (usageBar) parts.push(`usage: ${usageBar}`);
+  if (usageText) parts.push(`usage: ${usageText}`);
   process.stdout.write(parts.join(' \u2502 '));
 }
 
@@ -424,8 +472,8 @@ function getUsage(input, callback) {
 if (process.argv[2] === '--refresh-usage') {
   refreshAgyUsage();
 } else if (process.stdin.isTTY) {
-  getUsage('', (usageBar) => {
-    outputFallback(usageBar);
+  getUsage('', (usageText) => {
+    outputFallback(usageText);
     process.exit(0);
   });
 } else {
@@ -436,16 +484,16 @@ if (process.argv[2] === '--refresh-usage') {
 
   const timeout = setTimeout(() => {
     timeoutReached = true;
-    getUsage(input, (usageBar) => {
+    getUsage(input, (usageText) => {
       if (input.length > 0) {
         try {
           const data = JSON.parse(input);
-          outputStatus(data, usageBar);
+          outputStatus(data, usageText);
         } catch (e) {
-          outputFallback(usageBar);
+          outputFallback(usageText);
         }
       } else {
-        outputFallback(usageBar);
+        outputFallback(usageText);
       }
       process.exit(0);
     });
@@ -457,12 +505,12 @@ if (process.argv[2] === '--refresh-usage') {
     if (timeoutReached) return;
     clearTimeout(timeout);
 
-    getUsage(input, (usageBar) => {
+    getUsage(input, (usageText) => {
       try {
         const data = JSON.parse(input);
-        outputStatus(data, usageBar);
+        outputStatus(data, usageText);
       } catch (e) {
-        outputFallback(usageBar);
+        outputFallback(usageText);
       }
       process.exit(0);
     });
