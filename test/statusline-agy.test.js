@@ -143,12 +143,14 @@ test('fallback line (no stdin model) uses the model from agy settings.json', () 
 });
 
 // The shared real-usage contract: the same windows must render identically here and in Claude Code.
+// The match is anchored to the end of the line so a trailing stale marker or a dollar suffix cannot
+// pass as the expected segment.
 for (const c of usageCases) {
   test(`agy usage segment: ${c.name}`, () => {
     const r = withCache({ fetchedAt: NOW - MIN, groups: cacheFromWindows(c.windows) });
     const line = stripAnsi(r.stdout);
     if (c.segment === null) assert.ok(!line.includes('usage:'), line);
-    else assert.ok(line.includes(`usage: ${c.segment}`), line);
+    else assert.match(line, new RegExp(`usage: ${c.segment.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`), line);
   });
 }
 

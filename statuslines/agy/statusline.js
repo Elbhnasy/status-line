@@ -230,11 +230,13 @@ function formatDuration(ms) {
 }
 
 // One decimal below 10% (1.5603 -> "1.6"), an integer at or above (41.2 -> "41"): the precision the
-// vendor published, never rounded away (1.5603% is not 2%). The value is normalised to one decimal
-// first, so a float artifact (1 - 0.9 = 0.0999… -> 9.999999999999998%) still prints "10", not "10.0".
+// vendor published, never rounded away (1.5603% is not 2%). The *branch* comes from the value
+// rounded to one decimal (so 9.96 and a `1 - 0.9` float artifact still print "10"), but the integer
+// is rounded from the raw number: rounding twice would print 12.46% as "13". Capped at 100.
 function formatWindowPercent(pct) {
-  const value = Math.round(pct * 10) / 10;
-  return value < 10 ? value.toFixed(1) : String(Math.round(value));
+  const value = Math.min(100, pct);
+  const oneDecimal = Math.round(value * 10) / 10;
+  return oneDecimal < 10 ? oneDecimal.toFixed(1) : String(Math.round(value));
 }
 
 const BAR_WIDTH = 10;
@@ -242,7 +244,8 @@ const WINDOW_ORDER = ['5h', 'wk'];
 
 // The published windows, labelled: `5h 1.6% (4h33m) · wk 0.3% (6d23h)`. The bar comes from the
 // binding window (the live one with the higher usage); a window whose reset_time has passed is
-// dropped rather than shown stale. Returns null when nothing is live.
+// dropped rather than shown stale. Every window keeps its label even when it is the only one, so
+// the survivor can never be read as the other window. Returns null when nothing is live.
 function usageParts(windows, now) {
   const usable = (windows || []).filter(w => typeof w.pct === 'number' && Number.isFinite(w.pct) && w.pct >= 0);
   const live = usable.filter(w => w.resetsAt == null || w.resetsAt > now);
@@ -250,11 +253,9 @@ function usageParts(windows, now) {
   const binding = live.reduce((a, b) => (b.pct > a.pct ? b : a));
   const rest = live.filter(w => w !== binding)
     .sort((a, b) => WINDOW_ORDER.indexOf(a.label) - WINDOW_ORDER.indexOf(b.label));
-  const labelled = usable.length > 1;
-  const text = [binding, ...rest].map((w) => {
-    const label = labelled ? `${w.label} ` : '';
-    return `${label}${formatWindowPercent(w.pct)}%${w.resetsAt ? ` (${formatDuration(w.resetsAt - now)})` : ''}`;
-  }).join(' · ');
+  const text = [binding, ...rest].map((w) =>
+    `${w.label} ${formatWindowPercent(w.pct)}%${w.resetsAt ? ` (${formatDuration(w.resetsAt - now)})` : ''}`
+  ).join(' · ');
   const filled = Math.max(0, Math.min(BAR_WIDTH, Math.round((binding.pct / 100) * BAR_WIDTH)));
   return {
     pct: binding.pct,

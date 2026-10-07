@@ -76,20 +76,24 @@ function formatDuration(ms) {
 }
 
 // One decimal below 10% (1.5603 -> "1.6"), an integer at or above (41.2 -> "41"): the precision the
-// provider published, never rounded away (1.5603% is not 2%). The value is normalised to one decimal
-// first, so a float artifact (1 - 0.9 = 0.0999… -> 9.999999999999998%) still prints "10", not "10.0".
+// provider published, never rounded away (1.5603% is not 2%). The *branch* comes from the value
+// rounded to one decimal (so 9.96 and a `1 - 0.9` float artifact still print "10"), but the integer
+// is rounded from the raw number: rounding twice would print 12.46% as "13". Capped at 100 — nothing
+// published above a full window, and a source that scales oddly must not print 120%.
 function formatWindowPercent(pct) {
-  const value = Math.round(pct * 10) / 10;
-  return value < 10 ? value.toFixed(1) : String(Math.round(value));
+  const value = Math.min(100, pct);
+  const oneDecimal = Math.round(value * 10) / 10;
+  return oneDecimal < 10 ? oneDecimal.toFixed(1) : String(Math.round(value));
 }
 
 const BAR_WIDTH = 10;
-const WINDOW_ORDER = ['5h', 'wk'];
+const WINDOW_ORDER = ['5h', 'wk', 'opus wk', 'sonnet wk'];
 
 // The provider's own windows, labelled: `wk 3.0% (1d9h) · 5h 1.0% (4h4m)`. The bar comes from the
 // binding window (the live one with the highest used_percentage); a window whose resets_at has
-// passed is dropped rather than shown stale. Returns null when nothing is live — the caller then
-// shows no usage at all, which is honest: a percentage of nothing is not a value.
+// passed is dropped rather than shown stale. Every window keeps its label even when it is the only
+// one left (Claude Code drops expired windows before sending them), so the survivor can never be
+// read as a different window. Returns null when nothing is live.
 function usageParts(windows, now) {
   const usable = (windows || []).filter(w => typeof w.pct === 'number' && Number.isFinite(w.pct) && w.pct >= 0);
   const live = usable.filter(w => w.resetsAt == null || w.resetsAt > now);
@@ -97,13 +101,9 @@ function usageParts(windows, now) {
   const binding = live.reduce((a, b) => (b.pct > a.pct ? b : a));
   const rest = live.filter(w => w !== binding)
     .sort((a, b) => WINDOW_ORDER.indexOf(a.label) - WINDOW_ORDER.indexOf(b.label));
-  // A source that publishes a single window needs no label; one that published several keeps them,
-  // so a window dropped for expiry can never be mistaken for the one still shown.
-  const labelled = usable.length > 1;
-  const text = [binding, ...rest].map((w) => {
-    const label = labelled ? `${w.label} ` : '';
-    return `${label}${formatWindowPercent(w.pct)}%${w.resetsAt ? ` (${formatDuration(w.resetsAt - now)})` : ''}`;
-  }).join(' · ');
+  const text = [binding, ...rest].map((w) =>
+    `${w.label} ${formatWindowPercent(w.pct)}%${w.resetsAt ? ` (${formatDuration(w.resetsAt - now)})` : ''}`
+  ).join(' · ');
   const filled = Math.max(0, Math.min(BAR_WIDTH, Math.round((binding.pct / 100) * BAR_WIDTH)));
   return {
     pct: binding.pct,
@@ -113,10 +113,14 @@ function usageParts(windows, now) {
 }
 
 // The full `usage:` value: the window segment, the gateway's dollars when it published any, and a
-// dimmed age marker when the numbers could not be refreshed.
+// dimmed age marker when the numbers could not be refreshed. Dollars without a live window still
+// show: they are published values too.
 function renderUsage(state, now) {
   const parts = state && usageParts(state.windows, now);
-  if (!parts) return null;
+  if (!parts) {
+    return state && state.spend && state.staleAgeMs === undefined
+      ? `${colors.dim}${state.spend}${colors.reset}` : null;
+  }
   if (state.staleAgeMs !== undefined) {
     return `${colors.dim}${parts.bar} ${parts.text} · ${formatDuration(state.staleAgeMs)} ago${colors.reset}`;
   }
@@ -143,30 +147,34 @@ function usageFromStdin(data) {
     });
   }
   const spendLimit = limits.spend_limit;
+  // The published dollars, printed as published: rounding a $12.50 limit to $13 would be a number
+  // nobody sent.
   const spend = spendLimit && typeof spendLimit.used_usd === 'number'
     && typeof spendLimit.limit_usd === 'number' && spendLimit.limit_usd > 0
-    ? `$${spendLimit.used_usd.toFixed(2)}/$${spendLimit.limit_usd.toFixed(0)}${spendLimit.period ? ` ${spendLimit.period[0]}` : ''}`
+    ? `$${spendLimit.used_usd.toFixed(2)}/$${spendLimit.limit_usd}${spendLimit.period ? ` ${spendLimit.period[0]}` : ''}`
     : null;
-  return windows.length ? { windows, spend } : null;
+  return windows.length || spend ? { windows, spend } : null;
 }
 
-// The OAuth usage API's body, same shape: `utilization` per window, and `extra_usage` is the only
-// money a subscription plan publishes there.
+// The OAuth usage API's body, same shape but with the model-scoped weekly windows Claude Code does
+// not send on stdin; `extra_usage` is the only money a subscription plan publishes there.
+const API_WINDOW_KEYS = [['5h', 'five_hour'], ['wk', 'seven_day'],
+                         ['opus wk', 'seven_day_opus'], ['sonnet wk', 'seven_day_sonnet']];
+
 function usageFromApi(body) {
   const windows = [];
-  for (const [label, key] of WINDOW_KEYS) {
+  for (const [label, key] of API_WINDOW_KEYS) {
     const window = body[key];
     if (!window || typeof window.utilization !== 'number') continue;
     const resetsAt = window.resets_at ? Date.parse(window.resets_at) : NaN;
     windows.push({ label, pct: window.utilization, resetsAt: Number.isFinite(resetsAt) ? resetsAt : null });
   }
-  if (!windows.length) return null;
   const extra = body.extra_usage || {};
   const spend = extra.is_enabled && typeof extra.used_credits === 'number'
     && typeof extra.monthly_limit === 'number'
     ? `${extra.used_credits.toFixed(2)}/${extra.monthly_limit.toFixed(2)} ${extra.currency || 'USD'}`
     : null;
-  return { windows, spend };
+  return windows.length || spend ? { windows, spend } : null;
 }
 
 function readCache() {
@@ -399,24 +407,29 @@ function render(input) {
   });
 }
 
-// Process with timeout
-if (process.stdin.isTTY) {
-  render('');
-} else {
-  let input = '';
-  let rendered = false;
+// Process with timeout. `require.main` guard: the pure helpers above are unit-tested by requiring
+// this file, and only a real invocation (Claude Code piping session JSON) may touch stdin.
+if (require.main === module) {
+  if (process.stdin.isTTY) {
+    render('');
+  } else {
+    let input = '';
+    let rendered = false;
 
-  const timeout = setTimeout(() => {
-    rendered = true;
-    render(input);
-  }, IS_API_KEY ? 500 : 1300);
+    const timeout = setTimeout(() => {
+      rendered = true;
+      render(input);
+    }, IS_API_KEY ? 500 : 1300);
 
-  process.stdin.setEncoding('utf8');
-  process.stdin.on('data', chunk => input += chunk);
-  process.stdin.on('end', () => {
-    if (rendered) return;
-    rendered = true;
-    clearTimeout(timeout);
-    render(input);
-  });
+    process.stdin.setEncoding('utf8');
+    process.stdin.on('data', chunk => input += chunk);
+    process.stdin.on('end', () => {
+      if (rendered) return;
+      rendered = true;
+      clearTimeout(timeout);
+      render(input);
+    });
+  }
 }
+
+module.exports = { formatDuration, formatWindowPercent, usageParts, renderUsage, usageFromApi, usageFromStdin };

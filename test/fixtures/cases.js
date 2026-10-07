@@ -55,6 +55,25 @@ const claude = {
       ]),
     }),
   },
+  // A Claude apps gateway publishes dollars alongside the windows; the limit is printed as sent
+  // (a $12.50 limit must not print as $13).
+  'usage-gateway-spend-limit': {
+    stdin: claudePayload({
+      rate_limits: {
+        ...claudeRateLimits([
+          { label: '5h', pct: 42, resetsAt: NOW + 2 * HOUR + 14 * MIN },
+          { label: 'wk', pct: 5, resetsAt: NOW + 4 * 24 * HOUR },
+        ]),
+        spend_limit: { used_percentage: 6.4, resets_at: Math.floor((NOW + 26 * 24 * HOUR) / 1000),
+                       used_usd: 3.2, limit_usd: 12.5, period: 'monthly' },
+      },
+    }),
+  },
+  'usage-gateway-spend-only': {
+    stdin: claudePayload({
+      rate_limits: { spend_limit: { used_percentage: 6.4, used_usd: 3.2, limit_usd: 12.5, period: 'monthly' } },
+    }),
+  },
   'no-rate-limits-no-creds': { stdin: claudePayload() },
   'context-45': { stdin: claudePayload({ context_window: { remaining_percentage: 55 } }) },
   'context-55': { stdin: claudePayload({ context_window: { remaining_percentage: 45 } }) },

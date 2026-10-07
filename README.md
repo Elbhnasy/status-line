@@ -50,13 +50,17 @@ What the segment shows, in every CLI:
 1. **Only numbers a source published.** Where a provider publishes a subscription window as a
    fraction (Anthropic, Google) that fraction *is* the real value; no token or dollar magnitude is
    invented for it. Dollars appear only where the source exposes them (a Claude apps gateway's
-   `spend_limit`, Anthropic's `extra_usage`, OpenRouter credits).
+   `spend_limit`, Anthropic's `extra_usage`), and they are printed as sent — a $12.50 limit is not
+   rounded to $13.
 2. **Every window that source publishes**, each labelled: the 5-hour **and** the weekly limit, not
-   just one of them.
+   just one of them. A window keeps its label even when it is the only one live, so a survivor can
+   never be mistaken for a different window.
 3. **The bar is drawn from the binding window** (the live window with the highest usage) and its
-   number is always printed next to it.
-4. **Real precision:** one decimal below 10%, an integer at or above. `1.5603%` reads `1.6%`, never
-   `2%`; `0.26%` reads `0.3%`, never `0%`.
+   number is always printed next to it. On a narrow terminal the secondary windows are given up
+   before the whole segment is.
+4. **Real precision:** one decimal below 10%, an integer at or above, and the integer always comes
+   from the published number. `1.5603%` reads `1.6%` (never `2%`), `0.26%` reads `0.3%` (never
+   `0%`), and `12.46%` reads `12%` (never `13%`).
 5. **A window past its reset is dropped**, exactly as Claude Code drops it. With no live window left
    the segment disappears (or, in Hermes, falls back to the session's real token total: `Σ790K tok`).
 6. **Nothing is shown stale without saying so:** an unrefreshed value is dimmed with its age.
@@ -82,8 +86,9 @@ Set `STATUS_LINE_AGY_BIN` if `agy` is not on `PATH`.
 
 Source order: Claude Code's stdin `rate_limits` (5-hour + weekly, plus a gateway `spend_limit`) →
 a 3-minute shared cache (`~/.claude/cache/usage-cache-v3.json`) → the OAuth usage API (with 429
-backoff) → the cache shown dimmed with its age. With an API key (`ANTHROPIC_API_KEY`) there are no
-subscription windows to show, so the segment is omitted rather than faked.
+backoff; it also carries the model-scoped `seven_day_opus`/`seven_day_sonnet` windows) → the cache
+shown dimmed with its age. When the source publishes no subscription window at all (an API-key
+session, or a subscriber before the first API response) the segment is omitted rather than faked.
 
 ### Hermes
 
@@ -93,9 +98,18 @@ itself, cut against upstream commit `statuslines/hermes/BASE`.
 The `usage:` segment reads Hermes' own account-usage cache
 (`agent.account_usage_cache.cached_account_usage`) — the Anthropic/Codex/OpenRouter windows
 `hermes /usage` already fetches — and asks for a throttled background refresh instead of blocking a
-repaint. Until the first snapshot lands (about a second after startup) it shows the session's real
-token total. The retired `display.status_bar.usage_budget` key is unset by the installer and no
-longer read.
+repaint. The provider is re-read on every repaint, so the bar works before the first turn creates
+the agent and follows a `/model` switch. Until the first snapshot lands (a second or so after the
+first turn) it shows the session's real token total. The retired `display.status_bar.usage_budget`
+key is unset by the installer and no longer read.
+
+The patch also fixes `agent/account_usage.py`, which scaled Anthropic `utilization` values ≤ 1 by
+100 — a 1% session rendered as a full bar (the endpoint reports percentages: `five_hour.utilization`
+and `limits[].percent` agree). That fix reaches `hermes /usage` too.
+
+Installing over a previous version works without cleanup: when the packaged patch does not apply,
+the installer reverses the patch it recorded last time (`~/.status-line/hermes-statusbar-claude.patch`)
+and applies the new one over the result.
 
 The installer first tries a plain `git apply`. If that fails, it tries a 3-way merge against a
 throwaway index, so a patch that would conflict is refused and the checkout is left untouched.
