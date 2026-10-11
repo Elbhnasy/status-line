@@ -71,8 +71,13 @@ What the segment shows, in every CLI:
    the segment disappears (or, in Hermes, falls back to the session's real token total: `Σ790K tok`).
 6. **Nothing is shown stale without saying so:** an unrefreshed value is dimmed with its age.
 
-Examples: `usage: 5h ░░░░░░░░░░ 1.0% (4h4m) · wk 3.0% (1d9h)`, and once the week is nearly
-spent `usage: wk █████████░ 92% (1d9h) · 5h 20% (2h14m)`.
+Examples: `usage: 5h ▏          1.0% (4h4m) · wk 3.0% (1d9h)`, and once the week is nearly
+spent `usage: wk █████████▎ 92% (1d9h) · 5h 20% (2h14m)`.
+
+Every bar (context and usage, in all four statuslines) is a fixed 10 cells filled in eighths of a
+cell (`▏▎▍▌▋▊▉█`), so it moves every 1.25% instead of every 10%, rounding to the nearest eighth.
+The empty part is a dark tint of the bar's colour drawn as the background, so a partly filled cell
+still reads as one continuous bar.
 
 ### Agy usage bar
 

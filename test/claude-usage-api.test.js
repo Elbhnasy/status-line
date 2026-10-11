@@ -3,6 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const path = require('path');
+const { stripAnsi } = require('./helpers/ansi');
 
 const {
   formatDuration, formatWindowPercent, usageParts, usageFromApi, usageFromStdin,
@@ -77,27 +78,32 @@ test('stdin dollars are taken as published and survive without a window', () => 
 });
 
 test('usageParts labels every window, keeps the bar on 5h until a week nears its limit, and drops expired ones', () => {
-  const both = usageParts([
+  // The bar's track is a background colour, so compare the visible text.
+  const visible = (windows) => {
+    const parts = usageParts(windows, NOW);
+    return parts && { ...parts, text: stripAnsi(parts.text) };
+  };
+  const both = visible([
     { label: '5h', pct: 1.0, resetsAt: NOW + 4 * HOUR + 4 * 60000 },
     { label: 'wk', pct: 3.0, resetsAt: NOW + 33 * HOUR },
-  ], NOW);
-  assert.deepStrictEqual(both, { pct: 1.0, text: '5h ░░░░░░░░░░ 1.0% (4h4m) · wk 3.0% (1d9h)' });
+  ]);
+  assert.deepStrictEqual(both, { pct: 1.0, text: '5h ▏          1.0% (4h4m) · wk 3.0% (1d9h)' });
 
   // A model-scoped week counts toward the takeover like the account week.
-  const opusNearLimit = usageParts([
+  const opusNearLimit = visible([
     { label: '5h', pct: 30, resetsAt: NOW + HOUR },
     { label: 'wk', pct: 40, resetsAt: NOW + 33 * HOUR },
     { label: 'opus wk', pct: 91, resetsAt: NOW + 33 * HOUR },
-  ], NOW);
-  assert.deepStrictEqual(opusNearLimit, { pct: 91, text: 'opus wk █████████░ 91% (1d9h) · 5h 30% (1h) · wk 40% (1d9h)' });
+  ]);
+  assert.deepStrictEqual(opusNearLimit, { pct: 91, text: 'opus wk █████████▏ 91% (1d9h) · 5h 30% (1h) · wk 40% (1d9h)' });
 
   // A single live window keeps its label: Claude Code drops expired windows before sending them,
   // so the survivor must not read as the 5-hour window.
-  const onlyWeek = usageParts([
+  const onlyWeek = visible([
     { label: '5h', pct: 88, resetsAt: NOW - 60000 },
     { label: 'wk', pct: 41.2, resetsAt: NOW + 4 * 24 * HOUR },
-  ], NOW);
-  assert.deepStrictEqual(onlyWeek, { pct: 41.2, text: 'wk ████░░░░░░ 41% (4d)' });
+  ]);
+  assert.deepStrictEqual(onlyWeek, { pct: 41.2, text: 'wk ████▏      41% (4d)' });
 
   assert.strictEqual(usageParts([{ label: '5h', pct: 88, resetsAt: NOW - 60000 }], NOW), null);
   assert.strictEqual(usageParts([], NOW), null);

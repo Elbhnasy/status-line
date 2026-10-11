@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 // OpenCode statusline matching ~/.claude/hooks/statusline.js:
-//   dir │ model │ effort │ context: ███░░░░░░░ 30%
+//   dir │ model │ effort │ context: ███▌       35%
 import type { AssistantMessage, UserMessage } from "@opencode-ai/sdk/v2"
 import type { TuiPlugin, TuiPluginApi, TuiPluginModule } from "@opencode-ai/plugin/tui"
 import { createMemo } from "solid-js"
@@ -15,6 +15,22 @@ function contextColor(used: number) {
   if (used < 65) return YELLOW
   if (used < 80) return ORANGE
   return RED
+}
+
+// The bar's empty track: a dark tint of its colour drawn as the background, so a partly filled
+// cell still reads as one continuous bar instead of leaving a blank gap before the empty cells.
+const TRACK: Record<string, string> = { [GREEN]: "#005f00", [YELLOW]: "#5f5f00", [ORANGE]: "#875f00", [RED]: "#5f0000" }
+
+const BAR_WIDTH = 10
+const PARTIAL = ["", "▏", "▎", "▍", "▌", "▋", "▊", "▉"]
+
+// A fixed BAR_WIDTH-cell bar filled in eighths of a cell (80 steps, one per 1.25%), so a small
+// change still moves it instead of waiting for a whole 10% cell. Rounds to the nearest eighth.
+function renderBar(pct: number) {
+  const eighths = Math.max(0, Math.min(BAR_WIDTH * 8, Math.round((pct / 100) * BAR_WIDTH * 8)))
+  const full = Math.floor(eighths / 8)
+  const partial = PARTIAL[eighths % 8]
+  return "█".repeat(full) + partial + " ".repeat(BAR_WIDTH - full - (partial ? 1 : 0))
 }
 
 function View(props: { api: TuiPluginApi }) {
@@ -55,10 +71,6 @@ function View(props: { api: TuiPluginApi }) {
     return Math.max(0, Math.min(100, Math.round((t / model().limit) * 100)))
   })
 
-  const bar = () => {
-    const filled = Math.floor(used() / 10)
-    return "█".repeat(filled) + "░".repeat(10 - filled)
-  }
   const dir = () => (api.state.path.directory || "").split("/").filter(Boolean).pop() ?? "~"
   const sep = () => <span style={{ fg: theme().textMuted }}> │ </span>
 
@@ -72,7 +84,8 @@ function View(props: { api: TuiPluginApi }) {
         {effort() ? <span style={{ fg: theme().textMuted }}>{effort()}</span> : ""}
         {sep()}
         <span style={{ fg: theme().text }}>context: </span>
-        <span style={{ fg: contextColor(used()) }}>{`${bar()} ${used()}%`}</span>
+        <span style={{ fg: contextColor(used()), bg: TRACK[contextColor(used())] }}>{renderBar(used())}</span>
+        <span style={{ fg: contextColor(used()) }}>{` ${used()}%`}</span>
       </text>
     </box>
   )

@@ -49,25 +49,40 @@ function getUsageColor(percentage) {
   return colors.red;
 }
 
+const BAR_WIDTH = 10;
+const PARTIAL = ['', '\u258F', '\u258E', '\u258D', '\u258C', '\u258B', '\u258A', '\u2589'];
+// The bar's empty track: a dark tint of its colour drawn as the background, so a partly filled
+// cell still reads as one continuous bar instead of leaving a blank gap before the empty cells.
+const TRACK = {
+  [colors.green]: '\x1b[48;5;22m',
+  [colors.yellow]: '\x1b[48;5;58m',
+  [colors.orange]: '\x1b[48;5;94m',
+  [colors.red]: '\x1b[48;5;52m',
+  [colors.dim]: '\x1b[48;5;236m'
+};
+
+// A fixed BAR_WIDTH-cell bar filled in eighths of a cell (80 steps, one per 1.25%), so a small
+// change still moves it instead of waiting for a whole 10% cell. Rounds to the nearest eighth.
+function renderBar(pct, color) {
+  const eighths = Math.max(0, Math.min(BAR_WIDTH * 8, Math.round((pct / 100) * BAR_WIDTH * 8)));
+  const full = Math.floor(eighths / 8);
+  const partial = PARTIAL[eighths % 8];
+  const cells = '\u2588'.repeat(full) + partial + ' '.repeat(BAR_WIDTH - full - (partial ? 1 : 0));
+  return `${TRACK[color]}${cells}\x1b[49m`;
+}
+
 function getContextBar(remaining) {
   const effectiveRemaining = remaining ?? 100;
   const used = Math.max(0, Math.min(100, 100 - Math.round(effectiveRemaining)));
 
-  const filled = Math.floor(used / 10);
-  const bar = '\u2588'.repeat(filled) + '\u2591'.repeat(10 - filled);
-
-  let coloredBar;
   if (used < 50) {
-    coloredBar = `${colors.green}${bar} ${used}%${colors.reset}`;
+    return `${colors.green}${renderBar(used, colors.green)} ${used}%${colors.reset}`;
   } else if (used < 65) {
-    coloredBar = `${colors.yellow}${bar} ${used}%${colors.reset}`;
+    return `${colors.yellow}${renderBar(used, colors.yellow)} ${used}%${colors.reset}`;
   } else if (used < 80) {
-    coloredBar = `${colors.orange}${bar} ${used}%${colors.reset}`;
-  } else {
-    coloredBar = `${colors.blink}${colors.red}\u{1F480} ${bar} ${used}%${colors.reset}`;
+    return `${colors.orange}${renderBar(used, colors.orange)} ${used}%${colors.reset}`;
   }
-
-  return coloredBar;
+  return `${colors.blink}${colors.red}\u{1F480} ${renderBar(used, colors.red)} ${used}%${colors.reset}`;
 }
 
 // Read cached usage data
@@ -169,13 +184,9 @@ function getApiUsage(callback) {
             }
 
             // Build bar
-            const barWidth = 10;
-            const filledWidth = Math.round((percentage / 100) * barWidth);
-            const filled = '\u2588'.repeat(filledWidth);
-            const empty = '\u2591'.repeat(barWidth - filledWidth);
             const color = getUsageColor(percentage);
 
-            const bar = `${color}${filled}${empty} ${percentage}%${colors.reset}${colors.dim} (${timeStr})${colors.reset}`;
+            const bar = `${color}${renderBar(percentage, color)} ${percentage}%${colors.reset}${colors.dim} (${timeStr})${colors.reset}`;
 
             // Cache the result for other sessions
             setCachedUsage(bar);
@@ -239,18 +250,18 @@ function formatWindowPercent(pct) {
   return oneDecimal < 10 ? oneDecimal.toFixed(1) : String(Math.round(value));
 }
 
-const BAR_WIDTH = 10;
 const WINDOW_ORDER = ['5h', 'wk'];
 const WEEKLY_TAKEOVER_PCT = 90;
 
-// The published windows, labelled: `5h ░░░░░░░░░░ 1.6% (4h33m) · wk 0.3% (6d23h)`. The bar
+// The published windows, labelled: `5h ▏          1.6% (4h33m) · wk 0.3% (6d23h)`. The bar
 // window comes first with the bar between its label and its number: the 5-hour window, unless the
 // weekly one has reached WEEKLY_TAKEOVER_PCT (or the 5-hour one is gone), and then the more-used
 // window. A weekly budget is far larger than a 5-hour one, so a higher weekly percentage does not
 // mean it runs out first until it is nearly spent. A window whose reset_time has passed is dropped
 // rather than shown stale. Every window keeps its label even when it is the only one, so the
-// survivor can never be read as the other window. Returns null when nothing is live.
-function usageParts(windows, now) {
+// survivor can never be read as the other window. The bar is drawn on a grey track when the numbers
+// are stale. Returns null when nothing is live.
+function usageParts(windows, now, stale) {
   const usable = (windows || []).filter(w => typeof w.pct === 'number' && Number.isFinite(w.pct) && w.pct >= 0);
   const live = usable.filter(w => w.resetsAt == null || w.resetsAt > now);
   if (!live.length) return null;
@@ -260,8 +271,7 @@ function usageParts(windows, now) {
   const barWindow = fiveHour && !weeklyNearLimit ? fiveHour : mostUsed;
   const rest = live.filter(w => w !== barWindow)
     .sort((a, b) => WINDOW_ORDER.indexOf(a.label) - WINDOW_ORDER.indexOf(b.label));
-  const filled = Math.max(0, Math.min(BAR_WIDTH, Math.round((barWindow.pct / 100) * BAR_WIDTH)));
-  const bar = '\u2588'.repeat(filled) + '\u2591'.repeat(BAR_WIDTH - filled);
+  const bar = renderBar(barWindow.pct, stale ? colors.dim : getUsageColor(barWindow.pct));
   const reading = (w) => `${formatWindowPercent(w.pct)}%${w.resetsAt ? ` (${formatDuration(w.resetsAt - now)})` : ''}`;
   const text = [`${barWindow.label} ${bar} ${reading(barWindow)}`, ...rest.map(w => `${w.label} ${reading(w)}`)]
     .join(' · ');
@@ -270,7 +280,7 @@ function usageParts(windows, now) {
 
 // The full `usage:` value, dimmed with its age when the numbers could not be refreshed.
 function renderUsage(state, now) {
-  const parts = state && usageParts(state.windows, now);
+  const parts = state && usageParts(state.windows, now, state.staleAgeMs !== undefined);
   if (!parts) return null;
   if (state.staleAgeMs !== undefined) {
     return `${colors.dim}${parts.text} · ${formatDuration(state.staleAgeMs)} ago${colors.reset}`;

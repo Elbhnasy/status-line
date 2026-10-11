@@ -17,15 +17,17 @@ const SCRIPT = path.join(ROOT, 'statuslines/claude/statusline.js');
 // sha256 of statuslines/claude/statusline.js as shipped. It is deliberately NO LONGER byte-identical
 // to the original at ~/.claude/hooks/statusline.js: reporting both real rate-limit windows at real
 // precision is the point of this change. This pin only catches accidental edits.
-const PACKAGED_SHA = 'fe9df8c034cc640e533bd9b1e147f1f53d21c282e28b4004146c61940f2050da';
+const PACKAGED_SHA = 'd758bb039d70b4a655e9102f2cdb7112509bc4cc6dc858cefd4400f8ff948275';
 
 test('claude statusline hash is pinned (tripwire only)', () => {
   assert.strictEqual(sha256(SCRIPT), PACKAGED_SHA);
 });
 
-test('opencode statusline is byte-identical to the original', () => {
+// The opencode plugin is no longer the original either: its context bar fills in eighths of a cell
+// on a background track, like the Claude script's. This pin only catches accidental edits.
+test('opencode statusline hash is pinned (tripwire only)', () => {
   assert.strictEqual(sha256(path.join(ROOT, 'statuslines/opencode/statusline.tsx')),
-    'ea5b09b208ea10ce9324dddba70077586b0d680253d6399810f602970295a8e8');
+    '8fd882ce98c089b79f5886f314ffcc2219a6a35b8e4cfd3b83a13b40cf90e42b');
 });
 
 test('every claude case has a golden', () => {
@@ -54,7 +56,7 @@ for (const c of usageCases) {
 
 test('gateway dollars are printed as published, next to the windows', () => {
   const r = runStatusline(SCRIPT, { stdin: cases.claude['usage-gateway-spend-limit'].stdin });
-  assert.match(stripAnsi(r.stdout), /usage: 5h \u2588{4}\u2591{6} 42% \(2h14m\) · wk 5\.0% \(4d\) · \$3\.20\/\$12\.5 m$/);
+  assert.match(stripAnsi(r.stdout), /usage: 5h \u2588{4}\u258E[ ]{5} 42% \(2h14m\) · wk 5\.0% \(4d\) · \$3\.20\/\$12\.5 m$/);
 });
 
 test('dollars without a live window still show', () => {

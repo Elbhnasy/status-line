@@ -18,7 +18,7 @@ index f1ae4fa74c575c3f9eb6a7528113e9f4197f8753..7a316b3a2685fbc7687fe283ba43c276
      )
      details: list[str] = []
 diff --git a/hermes_cli/cli_status_bar_mixin.py b/hermes_cli/cli_status_bar_mixin.py
-index 47dac228a27c617fa99c4563d973e14d30fcaad8..27ed5bf109257f87cbf76762ff1b335991935792 100644
+index 47dac228a27c617fa99c4563d973e14d30fcaad8..286e16302e9978746e0b5813075b6cbb20fc9e4c 100644
 --- a/hermes_cli/cli_status_bar_mixin.py
 +++ b/hermes_cli/cli_status_bar_mixin.py
 @@ -8,6 +8,7 @@ inside each method (``from cli import ...``) — never at module load time (impo
@@ -84,7 +84,7 @@ index 47dac228a27c617fa99c4563d973e14d30fcaad8..27ed5bf109257f87cbf76762ff1b3359
      def _status_bar_segments(
          self, snapshot, width: int, field_set, yolo_active: bool, *, styled: bool) -> list:
          """Ordered status-bar segments for one width tier (<52 / <76 / wide), each a list of
-@@ -1106,12 +1141,141 @@ class CLIStatusBarMixin:
+@@ -1106,12 +1141,144 @@ class CLIStatusBarMixin:
                  segs.append([(_DIM, f"Σ{format_token_count_compact(total_tokens)}")])
          return segs
  
@@ -137,7 +137,7 @@ index 47dac228a27c617fa99c4563d973e14d30fcaad8..27ed5bf109257f87cbf76762ff1b3359
 +        """Claude-Code layout: ``dir │ model │ effort │ context: bar % │ usage: <windows>``.
 +
 +        ``usage`` reports the provider's own account-usage windows when it publishes any (see
-+        ``_account_usage_windows`` and ``status_bar_claude.usage_windows_label``), else the real
++        ``_account_usage_windows`` and ``status_bar_claude.usage_windows_parts``), else the real
 +        session token total — never a percentage of a budget nobody published.
 +
 +        Built from the same snapshot and skin style classes as the default renderer, so colours
@@ -146,13 +146,13 @@ index 47dac228a27c617fa99c4563d973e14d30fcaad8..27ed5bf109257f87cbf76762ff1b3359
 +        ``context`` always stay, and the callers trim as a last resort.
 +        """
 +        from hermes_cli.status_bar_claude import (
-+            DROP_ORDER, SEGMENT_ORDER, render_bar, round_half_up, usage_windows_label)
++            DROP_ORDER, SEGMENT_ORDER, render_bar, round_half_up, track_style, usage_windows_parts)
 +
 +        def _pct(value) -> str:
 +            return "--" if value is None else f"{round_half_up(value)}%"
 +
 +        def _bar_segment(label_key: str, pct, style: str) -> list:
-+            return [(_DIM, f"{t(label_key)} "), (style, render_bar(pct)),
++            return [(_DIM, f"{t(label_key)} "), (track_style(style), render_bar(pct)),
 +                    (_DIM, " "), (style, _pct(pct))]
 +
 +        model_short = snapshot["model_short"]
@@ -166,22 +166,25 @@ index 47dac228a27c617fa99c4563d973e14d30fcaad8..27ed5bf109257f87cbf76762ff1b3359
 +            "context": _bar_segment("cli.status_bar.ctx_label", ctx_pct, ctx_style),
 +        }
 +        # usage: the provider's windows when it publishes any, else the session's real token total.
++        usage_label = (_DIM, f"{t('cli.status_bar.usage_label')} ")
 +        shrunk_usage = None
 +        shrunk_usage_done = False
-+        usage_pct, usage_text = usage_windows_label(self._account_usage_windows(), time.time())
-+        style = _DIM
-+        if usage_text is not None:
-+            shrunk_usage = usage_windows_label(self._account_usage_windows(), time.time(),
-+                                               binding_only=True)[1]
++        usage_pct, *usage_parts = usage_windows_parts(self._account_usage_windows(), time.time())
++        if usage_pct is not None:
++            style = self._status_bar_context_style(round_half_up(usage_pct))
++
++            def _usage_fragments(head, bar, tail) -> list:
++                return [usage_label, (style, head), (track_style(style), bar), (style, tail)]
++
++            available["usage"] = _usage_fragments(*usage_parts)
++            shrunk_usage = _usage_fragments(*usage_windows_parts(
++                self._account_usage_windows(), time.time(), binding_only=True)[1:])
 +        else:
 +            total_tokens = snapshot.get("session_total_tokens", 0)
 +            if total_tokens:
 +                from cli import format_token_count_compact
-+                usage_text = f"Σ{format_token_count_compact(total_tokens)} tok"
-+        if usage_text is not None:
-+            if usage_pct is not None:
-+                style = self._status_bar_context_style(round_half_up(usage_pct))
-+            available["usage"] = [(_DIM, f"{t('cli.status_bar.usage_label')} "), (style, usage_text)]
++                available["usage"] = [usage_label,
++                                      (_DIM, f"Σ{format_token_count_compact(total_tokens)} tok")]
 +
 +        # Requirement: ``model`` and ``context`` are never dropped by the builder, so they
 +        # (and ``usage``, already gated on data) are chosen by presence alone; only the
@@ -203,7 +206,7 @@ index 47dac228a27c617fa99c4563d973e14d30fcaad8..27ed5bf109257f87cbf76762ff1b3359
 +            # number that matters survives a narrow terminal, the secondary window is what goes.
 +            if name == "usage" and not shrunk_usage_done and shrunk_usage is not None:
 +                shrunk_usage_done = True
-+                available["usage"] = [(_DIM, f"{t('cli.status_bar.usage_label')} "), (style, shrunk_usage)]
++                available["usage"] = shrunk_usage
 +                if _total() <= width:
 +                    break
 +            if name in keep:
@@ -226,7 +229,7 @@ index 47dac228a27c617fa99c4563d973e14d30fcaad8..27ed5bf109257f87cbf76762ff1b3359
              model_short = snapshot["model_short"]
              battery_label = snapshot.get("battery_label") or ""
              field_set = self._get_status_bar_field_set()
-@@ -1144,6 +1308,19 @@ class CLIStatusBarMixin:
+@@ -1144,6 +1311,19 @@ class CLIStatusBarMixin:
              width = self._get_tui_terminal_width()
              field_set = self._get_status_bar_field_set()
  
@@ -307,10 +310,10 @@ index d3d1a2a96d232ec8d3f9583cea6d8cd58ddb3ddd..49d18036b6eb5c3928da9bd4794af598
  
  def test_read_only_fetch_remembered_under_identity_slot(monkeypatch, tmp_path):
 diff --git a/tests/hermes_cli/test_cli_status_bar.py b/tests/hermes_cli/test_cli_status_bar.py
-index 738f3c0c436e4f2f410df82fd28d2a0922794b45..2ba2d371672b84bc7bf7f9632d4d4a12e03b21e4 100644
+index 738f3c0c436e4f2f410df82fd28d2a0922794b45..659473d5e7a42fe7b748f69cb5bcbd78f28b4d06 100644
 --- a/tests/hermes_cli/test_cli_status_bar.py
 +++ b/tests/hermes_cli/test_cli_status_bar.py
-@@ -522,3 +522,234 @@ class TestCacheHitBaselineReset:
+@@ -522,3 +522,236 @@ class TestCacheHitBaselineReset:
          with patch.object(cli_mod, "CLI_CONFIG", {"display": {"status_bar": {"fields": ["model", "duration"]}}}):
              text = cli_obj._build_status_bar_text(width=80)
          assert "weekly-digest" not in text
@@ -379,7 +382,7 @@ index 738f3c0c436e4f2f410df82fd28d2a0922794b45..2ba2d371672b84bc7bf7f9632d4d4a12
 +        # total — never a percentage of a budget nobody published.
 +        assert self._text(cli_obj, 120) == (
 +            "example-workspace │ claude-sonnet-4-20250514 │ high │ "
-+            "context: \u2588\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591 8% │ "
++            "context: \u258a" + " " * 9 + " 8% │ "
 +            "usage: \u03a3790K tok"
 +        )
 +
@@ -387,19 +390,19 @@ index 738f3c0c436e4f2f410df82fd28d2a0922794b45..2ba2d371672b84bc7bf7f9632d4d4a12
 +        # 95 cells fit at 100, so nothing is dropped yet.
 +        assert self._text(self._fixture(monkeypatch, tmp_path), 100) == (
 +            "example-workspace │ claude-sonnet-4-20250514 │ high │ "
-+            "context: \u2588\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591 8% │ "
++            "context: \u258a" + " " * 9 + " 8% │ "
 +            "usage: \u03a3790K tok"
 +        )
 +        # 80: ``dir`` goes first (DROP_ORDER).
 +        assert self._text(self._fixture(monkeypatch, tmp_path), 80) == (
 +            "claude-sonnet-4-20250514 │ high │ context: "
-+            "\u2588\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591 8% │ "
++            "\u258a" + " " * 9 + " 8% │ "
 +            "usage: \u03a3790K tok"
 +        )
 +        # 60: ``effort`` and then ``usage``.
 +        assert self._text(self._fixture(monkeypatch, tmp_path), 60) == (
 +            "claude-sonnet-4-20250514 │ context: "
-+            "\u2588\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591 8%"
++            "\u258a" + " " * 9 + " 8%"
 +        )
 +
 +    def test_usage_segment_renders_the_cached_provider_windows(self, monkeypatch, tmp_path):
@@ -418,7 +421,7 @@ index 738f3c0c436e4f2f410df82fd28d2a0922794b45..2ba2d371672b84bc7bf7f9632d4d4a12
 +
 +        text = self._text(cli_obj, 120)
 +        assert "usage: " in text
-+        assert "5h \u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591 1.0% (" in text
++        assert "5h \u258f" + " " * 9 + " 1.0% (" in text
 +        assert "wk 3.0% (" in text
 +        assert "Σ" not in text
 +
@@ -545,12 +548,14 @@ index 738f3c0c436e4f2f410df82fd28d2a0922794b45..2ba2d371672b84bc7bf7f9632d4d4a12
 +        assert "example-workspace" in text
 +        assert "context: " in text and "usage: " in text
 +        assert cli_obj._status_bar_display_width(text) <= 120
++        # The context bar is its own fragment, drawn on its track background.
++        assert any(" bg:" in style and value == "\u258a" + " " * 9 for style, value in frags)
 diff --git a/hermes_cli/status_bar_claude.py b/hermes_cli/status_bar_claude.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..5796cb6ad20b83fa7417dbc776817afb4422e077
+index 0000000000000000000000000000000000000000..0c145ffe8d1360feb6b3d9339fc8735875354d0e
 --- /dev/null
 +++ b/hermes_cli/status_bar_claude.py
-@@ -0,0 +1,210 @@
+@@ -0,0 +1,237 @@
 +"""Pure helpers for the Claude-Code-style status bar (``display.status_bar.style: claude``).
 +
 +The layout implemented by ``cli_status_bar_mixin._claude_status_bar_segments`` is::
@@ -573,7 +578,14 @@ index 0000000000000000000000000000000000000000..5796cb6ad20b83fa7417dbc776817afb
 +#: Cell count of both Claude-Code bars (context and usage).
 +BAR_WIDTH = 10
 +FILLED = "\u2588"   # █
-+EMPTY = "\u2591"    # ░
++EMPTY = " "        # an empty cell shows the track background (``track_style``)
++#: Partly filled cell, indexed by eighths: ▏▎▍▌▋▊▉ — 80 fill steps across the ten cells.
++PARTIAL = ("", "\u258f", "\u258e", "\u258d", "\u258c", "\u258b", "\u258a", "\u2589")
++#: The bar's empty track: a dark tint of each status-bar colour class, drawn as the background so
++#: a partly filled cell still reads as one continuous bar.
++TRACK_BG = {"class:status-bar-good": "#005f00", "class:status-bar-warn": "#5f5f00",
++            "class:status-bar-bad": "#875f00", "class:status-bar-critical": "#5f0000"}
++DIM_TRACK_BG = "#303030"
 +ELLIPSIS = "\u2026"  # …
 +
 +#: Documented default when ``agent.reasoning_effort`` is unset — "medium", see
@@ -660,32 +672,51 @@ index 0000000000000000000000000000000000000000..5796cb6ad20b83fa7417dbc776817afb
 +
 +def round_half_up(value) -> int:
 +    """Nearest integer, halves rounding up — the rule ``render_bar`` fills with. Deliberately
-+    not the built-in ``round``, whose banker's rounding makes 5% fill 0 cells."""
++    not the built-in ``round``, whose banker's rounding disagrees with the JS scripts."""
 +    return math.floor(float(value) + 0.5)
 +
 +
 +def render_bar(percent, width: int = BAR_WIDTH) -> str:
-+    """Ten-cell ``█``/``░`` bar with no brackets — Claude Code's look.
++    """Fixed ``width``-cell bar filled in eighths of a cell, with no brackets.
 +
++    80 steps across ten cells (one per 1.25%), so a small change still moves the bar instead of
++    waiting for a whole 10% cell. Empty cells are spaces that show ``track_style``'s background.
 +    ``None`` (no data yet) renders all-empty rather than a misleading empty/full bar. Fill
-+    rounds half-up to the nearest cell (see ``round_half_up``; Python's built-in
-+    ``round`` is banker's rounding, so ``5%`` would otherwise show 0 cells) and clamps to
-+    ``0..width``.
++    rounds half-up to the nearest eighth (see ``round_half_up``; same math as the JS scripts)
++    and clamps to ``0..width``.
 +    """
 +    safe = _clamp_percent(percent)
-+    filled = 0 if safe is None else round_half_up(safe / 100.0 * width)
-+    filled = max(0, min(width, filled))
-+    return FILLED * filled + EMPTY * (width - filled)
++    eighths = 0 if safe is None else round_half_up(safe / 100.0 * width * 8)
++    full, rest = divmod(max(0, min(width * 8, eighths)), 8)
++    partial = PARTIAL[rest]
++    return FILLED * full + partial + EMPTY * (width - full - (1 if partial else 0))
++
++
++def track_style(style: str) -> str:
++    """``style`` with the bar's track background: a dark tint of its colour class, grey otherwise."""
++    return f"{style} bg:{TRACK_BG.get(style, DIM_TRACK_BG)}"
 +
 +
 +def usage_windows_label(windows, now, width: int = BAR_WIDTH, binding_only: bool = False):
 +    """``(bar_percent, text)`` for the claude-style ``usage:`` segment, or ``(None, None)``.
 +
++    The joined form of ``usage_windows_parts``.
++    """
++    bar_pct, head, bar, tail = usage_windows_parts(windows, now, width, binding_only)
++    return (None, None) if bar_pct is None else (bar_pct, head + bar + tail)
++
++
++def usage_windows_parts(windows, now, width: int = BAR_WIDTH, binding_only: bool = False):
++    """``(bar_percent, head, bar, tail)`` for the ``usage:`` segment, or four ``None``.
++
++    Split around the bar so the caller can draw it on its track; ``head + bar + tail`` is the
++    segment text.
++
 +    ``windows`` are ``agent.account_usage.AccountUsageWindow``-shaped. The segment shows every live
 +    window the provider published, labelled, at real precision — neither Anthropic nor Google
 +    publishes a token or dollar magnitude for a subscription window, so the fraction *is* the real
 +    value. The bar window comes first, with the bar between its label and its number
-+    (``5h ░░░░░░░░░░ 1.0% (4h7m) · wk 3.0% (1d9h)``): the 5-hour window, unless a longer
++    (``5h ▏          1.0% (4h7m) · wk 3.0% (1d9h)``): the 5-hour window, unless a longer
 +    account-scoped window has reached ``WEEKLY_TAKEOVER_PCT`` (or there is no live 5-hour window),
 +    and then the account-scoped window with the highest ``used_percent``. A weekly budget is far
 +    larger than a 5-hour one, so a higher weekly percentage does not mean it runs out first until it
@@ -714,7 +745,7 @@ index 0000000000000000000000000000000000000000..5796cb6ad20b83fa7417dbc776817afb
 +            continue  # its window already reset
 +        live.append((window, max(0.0, min(100.0, used))))
 +    if not live:
-+        return None, None
++        return None, None, None, None
 +    account = [(w, used) for w, used in live if getattr(w, "scope", "account") != "model"] or live
 +    short = next((pair for pair in account
 +                  if _short_window_label(getattr(pair[0], "label", "")) in SHORT_WINDOWS), None)
@@ -728,13 +759,14 @@ index 0000000000000000000000000000000000000000..5796cb6ad20b83fa7417dbc776817afb
 +                  key=lambda pair: order.get(_short_window_label(getattr(pair[0], "label", "")), 99))
 +    shown = [(bar_window, bar_pct)] if binding_only else [(bar_window, bar_pct)] + rest
 +    parts = []
-+    for index, (window, used) in enumerate(shown):
++    for window, used in shown:
 +        label = _short_window_label(getattr(window, "label", ""))
-+        bar = f"{render_bar(bar_pct, width)} " if index == 0 else ""
 +        seconds = _seconds_until(getattr(window, "reset_at", None), now)
-+        parts.append(f"{label} {bar}{format_window_percent(used)}%"
-+                     + (f" ({format_window_duration(seconds)})" if seconds is not None else ""))
-+    return bar_pct, " · ".join(parts)
++        parts.append((label, f"{format_window_percent(used)}%"
++                      + (f" ({format_window_duration(seconds)})" if seconds is not None else "")))
++    (bar_label, bar_reading), others = parts[0], parts[1:]
++    tail = "".join(f" · {label} {reading}" for label, reading in others)
++    return bar_pct, f"{bar_label} ", render_bar(bar_pct, width), f" {bar_reading}{tail}"
 +
 +
 +def cwd_label(path) -> str:
@@ -763,10 +795,10 @@ index 0000000000000000000000000000000000000000..5796cb6ad20b83fa7417dbc776817afb
 +    return requested_effort(reasoning_config) or default
 diff --git a/tests/hermes_cli/test_status_bar_claude.py b/tests/hermes_cli/test_status_bar_claude.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..fe5ae93f99e422bc667edecba74d600532e86e80
+index 0000000000000000000000000000000000000000..2eecf0f252a46a5ef68a21fab7e5a0ea98e46397
 --- /dev/null
 +++ b/tests/hermes_cli/test_status_bar_claude.py
-@@ -0,0 +1,165 @@
+@@ -0,0 +1,184 @@
 +"""Unit tests for the pure Claude-style status-bar helpers (no live HermesCLI)."""
 +
 +from datetime import datetime, timedelta, timezone
@@ -778,14 +810,16 @@ index 0000000000000000000000000000000000000000..fe5ae93f99e422bc667edecba74d6005
 +
 +
 +@pytest.mark.parametrize("pct,expected", [
-+    (None, "\u2591" * 10),          # no data yet -> all empty, never a fake full/zero bar
-+    (0, "\u2591" * 10),
-+    (5, "\u2588" + "\u2591" * 9),   # 0.5 rounds half-up -> 1 cell
-+    (8, "\u2588" + "\u2591" * 9),   # round(0.8) = 1
-+    (50, "\u2588" * 5 + "\u2591" * 5),
-+    (79, "\u2588" * 8 + "\u2591" * 2),
++    (None, " " * 10),                   # no data yet -> all empty, never a fake full/zero bar
++    (0, " " * 10),
++    (1, "\u258f" + " " * 9),            # 0.8 eighths rounds to 1/8 of a cell
++    (5, "\u258c" + " " * 9),            # 4 eighths: half a cell
++    (8, "\u258a" + " " * 9),            # 6.4 eighths -> 6
++    (15, "\u2588\u258c" + " " * 8),
++    (50, "\u2588" * 5 + " " * 5),
++    (79, "\u2588" * 7 + "\u2589" + " " * 2),  # 63.2 eighths -> 7 cells and 7/8
 +    (100, "\u2588" * 10),
-+    (-5, "\u2591" * 10),
++    (-5, " " * 10),
 +    (150, "\u2588" * 10),
 +])
 +def test_render_bar(pct, expected):
@@ -793,7 +827,16 @@ index 0000000000000000000000000000000000000000..fe5ae93f99e422bc667edecba74d6005
 +
 +
 +def test_render_bar_width_override():
-+    assert sb.render_bar(50, width=4) == "\u2588\u2588\u2591\u2591"
++    assert sb.render_bar(50, width=4) == "\u2588\u2588  "
++
++
++def test_render_bar_is_always_width_cells():
++    assert all(len(sb.render_bar(pct / 4)) == sb.BAR_WIDTH for pct in range(0, 401))
++
++
++def test_track_style_tints_the_bar_colour_and_greys_anything_else():
++    assert sb.track_style("class:status-bar-good") == "class:status-bar-good bg:#005f00"
++    assert sb.track_style("class:status-bar-dim") == "class:status-bar-dim bg:#303030"
 +
 +
 +# --- real usage windows -------------------------------------------------------------------------
@@ -813,66 +856,74 @@ index 0000000000000000000000000000000000000000..fe5ae93f99e422bc667edecba74d6005
 +def test_usage_windows_label_puts_the_bar_on_5h_while_the_week_is_below_the_takeover():
 +    windows = [_w("Current session", 1.0, 4 + 7 / 60), _w("Current week", 89.0, 33)]
 +    assert sb.usage_windows_label(windows, EPOCH) == (
-+        1.0, "5h " + "\u2591" * 10 + " 1.0% (4h7m) \u00b7 wk 89% (1d9h)")
++        1.0, "5h " + "\u258f" + " " * 9 + " 1.0% (4h7m) \u00b7 wk 89% (1d9h)")
 +
 +
 +def test_usage_windows_label_week_at_the_takeover_takes_the_bar():
 +    windows = [_w("Current session", 20.0, 2 + 14 / 60), _w("Current week", 90.0, 48)]
 +    assert sb.usage_windows_label(windows, EPOCH) == (
-+        90.0, "wk " + "\u2588" * 9 + "\u2591" + " 90% (2d) \u00b7 5h 20% (2h14m)")
++        90.0, "wk " + "\u2588" * 9 + " " + " 90% (2d) \u00b7 5h 20% (2h14m)")
 +
 +
 +def test_usage_windows_label_past_the_takeover_the_more_used_window_keeps_the_bar():
 +    windows = [_w("Current session", 95.0, 2 + 14 / 60), _w("Current week", 92.0, 48)]
 +    assert sb.usage_windows_label(windows, EPOCH) == (
-+        95.0, "5h " + "\u2588" * 10 + " 95% (2h14m) \u00b7 wk 92% (2d)")
++        95.0, "5h " + "\u2588" * 9 + "\u258c" + " 95% (2h14m) \u00b7 wk 92% (2d)")
 +
 +
 +def test_usage_windows_label_keeps_one_decimal_below_ten():
 +    windows = [_w("Current session", 1.5603, 4 + 33 / 60), _w("Current week", 0.2601, 6 * 24 + 23)]
 +    assert sb.usage_windows_label(windows, EPOCH)[1] == \
-+        "5h " + "\u2591" * 10 + " 1.6% (4h33m) \u00b7 wk 0.3% (6d23h)"
++        "5h " + "\u258f" + " " * 9 + " 1.6% (4h33m) \u00b7 wk 0.3% (6d23h)"
 +
 +
 +def test_usage_windows_label_bar_ignores_model_scoped_windows():
 +    windows = [_w("Current session", 1.0, 4.0), _w("Current week", 3.0, 33.0),
 +               _w("Opus week", 96.8, 96.0, scope="model")]
 +    assert sb.usage_windows_label(windows, EPOCH) == (
-+        1.0, "5h " + "\u2591" * 10 + " 1.0% (4h) \u00b7 wk 3.0% (1d9h) \u00b7 opus wk 97% (4d)")
++        1.0, "5h " + "\u258f" + " " * 9 + " 1.0% (4h) \u00b7 wk 3.0% (1d9h) \u00b7 opus wk 97% (4d)")
 +
 +
 +def test_usage_windows_label_drops_windows_past_their_reset():
 +    windows = [_w("Current session", 88.0, -1 / 60), _w("Current week", 41.2, 96.0)]
 +    assert sb.usage_windows_label(windows, EPOCH) == (
-+        41.2, "wk " + "\u2588\u2588\u2588\u2588" + "\u2591" * 6 + " 41% (4d)")
++        41.2, "wk " + "\u2588" * 4 + "\u258f" + " " * 5 + " 41% (4d)")
 +
 +
 +def test_usage_windows_label_single_window_keeps_its_label():
 +    # The provider may publish only one window (or the others expired): the label stays, so the
 +    # survivor can never be read as a different window.
 +    assert sb.usage_windows_label([_w("Current session", 42.0, 2 + 14 / 60)], EPOCH) == (
-+        42.0, "5h " + "\u2588\u2588\u2588\u2588" + "\u2591" * 6 + " 42% (2h14m)")
++        42.0, "5h " + "\u2588" * 4 + "\u258e" + " " * 5 + " 42% (2h14m)")
 +
 +
 +def test_usage_windows_label_binding_only_keeps_the_bar_window_and_drops_the_rest():
 +    windows = [_w("Current session", 1.0, 4 + 7 / 60), _w("Current week", 41.2, 96.0)]
 +    assert sb.usage_windows_label(windows, EPOCH, binding_only=True) == (
-+        1.0, "5h " + "\u2591" * 10 + " 1.0% (4h7m)")
++        1.0, "5h " + "\u258f" + " " * 9 + " 1.0% (4h7m)")
 +
 +
 +def test_usage_windows_label_derives_codex_labels():
 +    windows = [_w("Session", 30.0, 25 / 60), _w("Weekly", 41.0, 5 * 24)]
 +    assert sb.usage_windows_label(windows, EPOCH)[1] == \
-+        "session " + "\u2588" * 3 + "\u2591" * 7 + " 30% (25m) \u00b7 weekly 41% (5d)"
++        "session " + "\u2588" * 3 + " " * 7 + " 30% (25m) \u00b7 weekly 41% (5d)"
 +
 +
 +def test_usage_windows_label_without_windows_is_none():
 +    assert sb.usage_windows_label([], EPOCH) == (None, None)
++    assert sb.usage_windows_parts([], EPOCH) == (None, None, None, None)
++
++
++def test_usage_windows_parts_split_around_the_bar():
++    windows = [_w("Current session", 42.0, 2 + 14 / 60), _w("Current week", 5.0, 96.0)]
++    pct, head, bar, tail = sb.usage_windows_parts(windows, EPOCH)
++    assert (pct, head, bar, tail) == (42.0, "5h ", sb.render_bar(42.0), " 42% (2h14m) \u00b7 wk 5.0% (4d)")
++    assert sb.usage_windows_label(windows, EPOCH) == (pct, head + bar + tail)
 +
 +
 +def test_usage_windows_label_counts_a_missing_reset_as_live():
 +    window = AccountUsageWindow(label="Current session", used_percent=7.0, reset_at=None)
-+    assert sb.usage_windows_label([window], EPOCH) == (7.0, "5h \u2588" + "\u2591" * 9 + " 7.0%")
++    assert sb.usage_windows_label([window], EPOCH) == (7.0, "5h \u258a" + " " * 9 + " 7.0%")
 +
 +
 +def test_window_duration_rule():
