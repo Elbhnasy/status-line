@@ -17,9 +17,9 @@ function contextColor(used: number) {
   return RED
 }
 
-// The bar's empty track: a dark tint of its colour drawn as the background, so a partly filled
-// cell still reads as one continuous bar instead of leaving a blank gap before the empty cells.
-const TRACK: Record<string, string> = { [GREEN]: "#005f00", [YELLOW]: "#5f5f00", [ORANGE]: "#875f00", [RED]: "#5f0000" }
+// The bar's empty track: one neutral grey background for every bar, so the empty part never reads
+// as progress and a partly filled cell still joins the empty cells into one continuous bar.
+const TRACK = "#3a3a3a"
 
 const BAR_WIDTH = 10
 const PARTIAL = ["", "▏", "▎", "▍", "▌", "▋", "▊", "▉"]
@@ -84,7 +84,7 @@ function View(props: { api: TuiPluginApi }) {
         {effort() ? <span style={{ fg: theme().textMuted }}>{effort()}</span> : ""}
         {sep()}
         <span style={{ fg: theme().text }}>context: </span>
-        <span style={{ fg: contextColor(used()), bg: TRACK[contextColor(used())] }}>{renderBar(used())}</span>
+        <span style={{ fg: contextColor(used()), bg: TRACK }}>{renderBar(used())}</span>
         <span style={{ fg: contextColor(used()) }}>{` ${used()}%`}</span>
       </text>
     </box>

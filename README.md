@@ -76,8 +76,8 @@ spent `usage: wk █████████▎ 92% (1d9h) · 5h 20% (2h14m)`.
 
 Every bar (context and usage, in all four statuslines) is a fixed 10 cells filled in eighths of a
 cell (`▏▎▍▌▋▊▉█`), so it moves every 1.25% instead of every 10%, rounding to the nearest eighth.
-The empty part is a dark tint of the bar's colour drawn as the background, so a partly filled cell
-still reads as one continuous bar.
+The fill takes the bar's colour; the empty part is one neutral grey background (`#3a3a3a`) for
+every bar, so it never reads as progress and a partly filled cell still joins it into one bar.
 
 ### Agy usage bar
 

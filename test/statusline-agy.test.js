@@ -76,7 +76,7 @@ for (const [id, c] of Object.entries(cases.agy)) {
 test('both buckets of the group are shown, at the published precision', () => {
   const r = withCache({ fetchedAt: NOW - MIN, groups: groups({ gemini: 0.9844, geminiWeekly: 0.9974 }) });
   assert.strictEqual(r.stdout,
-    `${golden['gemini-full']} │ usage: ${ESC}[32m5h ${ESC}[48;5;22m\u258F${' '.repeat(9)}${ESC}[49m 1.6% (2h14m) · wk 0.3% (7d)${ESC}[0m`);
+    `${golden['gemini-full']} │ usage: ${ESC}[32m5h ${ESC}[48;5;237m\u258F${' '.repeat(9)}${ESC}[49m 1.6% (2h14m) · wk 0.3% (7d)${ESC}[0m`);
 });
 
 test('the weekly bucket is shown even when it is the only one that moved', () => {
@@ -116,7 +116,7 @@ test('unknown model family hides the usage segment', () => {
 test('a cache older than 10 minutes is dimmed with its age', () => {
   const r = withCache({ fetchedAt: NOW - 25 * MIN, groups: groups({ gemini: 0.7 }) });
   assert.strictEqual(r.stdout,
-    `${golden['gemini-full']} │ usage: ${ESC}[2m5h ${ESC}[48;5;236m\u2588\u2588\u2588${' '.repeat(7)}${ESC}[49m 30% (2h14m) · wk 10% (7d) · 25m ago${ESC}[0m`);
+    `${golden['gemini-full']} │ usage: ${ESC}[2m5h ${ESC}[48;5;237m\u2588\u2588\u2588${' '.repeat(7)}${ESC}[49m 30% (2h14m) · wk 10% (7d) · 25m ago${ESC}[0m`);
 });
 
 test('a window past its reset is dropped, the live one stays', () => {

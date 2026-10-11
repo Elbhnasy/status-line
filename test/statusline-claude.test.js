@@ -17,17 +17,17 @@ const SCRIPT = path.join(ROOT, 'statuslines/claude/statusline.js');
 // sha256 of statuslines/claude/statusline.js as shipped. It is deliberately NO LONGER byte-identical
 // to the original at ~/.claude/hooks/statusline.js: reporting both real rate-limit windows at real
 // precision is the point of this change. This pin only catches accidental edits.
-const PACKAGED_SHA = 'd758bb039d70b4a655e9102f2cdb7112509bc4cc6dc858cefd4400f8ff948275';
+const PACKAGED_SHA = 'e8a99aa8d2381e6f88ff766031e422f871ad37540a2d42a061a8e6ac8841b94d';
 
 test('claude statusline hash is pinned (tripwire only)', () => {
   assert.strictEqual(sha256(SCRIPT), PACKAGED_SHA);
 });
 
 // The opencode plugin is no longer the original either: its context bar fills in eighths of a cell
-// on a background track, like the Claude script's. This pin only catches accidental edits.
+// on a grey background track, like the Claude script's. This pin only catches accidental edits.
 test('opencode statusline hash is pinned (tripwire only)', () => {
   assert.strictEqual(sha256(path.join(ROOT, 'statuslines/opencode/statusline.tsx')),
-    '8fd882ce98c089b79f5886f314ffcc2219a6a35b8e4cfd3b83a13b40cf90e42b');
+    'b698cbb2452e3fc248b61bea2467f630fc239b91c0c37796841c4c1b85a3ce2c');
 });
 
 test('every claude case has a golden', () => {

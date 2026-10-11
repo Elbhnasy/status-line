@@ -552,10 +552,10 @@ index 738f3c0c436e4f2f410df82fd28d2a0922794b45..659473d5e7a42fe7b748f69cb5bcbd78
 +        assert any(" bg:" in style and value == "\u258a" + " " * 9 for style, value in frags)
 diff --git a/hermes_cli/status_bar_claude.py b/hermes_cli/status_bar_claude.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..0c145ffe8d1360feb6b3d9339fc8735875354d0e
+index 0000000000000000000000000000000000000000..1ab3a08b0de6d5f2e180e851101d91b4d0d23f6a
 --- /dev/null
 +++ b/hermes_cli/status_bar_claude.py
-@@ -0,0 +1,237 @@
+@@ -0,0 +1,235 @@
 +"""Pure helpers for the Claude-Code-style status bar (``display.status_bar.style: claude``).
 +
 +The layout implemented by ``cli_status_bar_mixin._claude_status_bar_segments`` is::
@@ -581,11 +581,9 @@ index 0000000000000000000000000000000000000000..0c145ffe8d1360feb6b3d9339fc87358
 +EMPTY = " "        # an empty cell shows the track background (``track_style``)
 +#: Partly filled cell, indexed by eighths: ▏▎▍▌▋▊▉ — 80 fill steps across the ten cells.
 +PARTIAL = ("", "\u258f", "\u258e", "\u258d", "\u258c", "\u258b", "\u258a", "\u2589")
-+#: The bar's empty track: a dark tint of each status-bar colour class, drawn as the background so
-+#: a partly filled cell still reads as one continuous bar.
-+TRACK_BG = {"class:status-bar-good": "#005f00", "class:status-bar-warn": "#5f5f00",
-+            "class:status-bar-bad": "#875f00", "class:status-bar-critical": "#5f0000"}
-+DIM_TRACK_BG = "#303030"
++#: The bar's empty track: one neutral grey background for every bar, so the empty part never reads
++#: as progress and a partly filled cell still joins the empty cells into one continuous bar.
++TRACK_BG = "#3a3a3a"
 +ELLIPSIS = "\u2026"  # …
 +
 +#: Documented default when ``agent.reasoning_effort`` is unset — "medium", see
@@ -693,8 +691,8 @@ index 0000000000000000000000000000000000000000..0c145ffe8d1360feb6b3d9339fc87358
 +
 +
 +def track_style(style: str) -> str:
-+    """``style`` with the bar's track background: a dark tint of its colour class, grey otherwise."""
-+    return f"{style} bg:{TRACK_BG.get(style, DIM_TRACK_BG)}"
++    """``style`` (the fill colour) on the bar's grey track background."""
++    return f"{style} bg:{TRACK_BG}"
 +
 +
 +def usage_windows_label(windows, now, width: int = BAR_WIDTH, binding_only: bool = False):
@@ -795,7 +793,7 @@ index 0000000000000000000000000000000000000000..0c145ffe8d1360feb6b3d9339fc87358
 +    return requested_effort(reasoning_config) or default
 diff --git a/tests/hermes_cli/test_status_bar_claude.py b/tests/hermes_cli/test_status_bar_claude.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..2eecf0f252a46a5ef68a21fab7e5a0ea98e46397
+index 0000000000000000000000000000000000000000..d4236f90f0bfca9df67818cc68d9fa8891c99512
 --- /dev/null
 +++ b/tests/hermes_cli/test_status_bar_claude.py
 @@ -0,0 +1,184 @@
@@ -834,9 +832,9 @@ index 0000000000000000000000000000000000000000..2eecf0f252a46a5ef68a21fab7e5a0ea
 +    assert all(len(sb.render_bar(pct / 4)) == sb.BAR_WIDTH for pct in range(0, 401))
 +
 +
-+def test_track_style_tints_the_bar_colour_and_greys_anything_else():
-+    assert sb.track_style("class:status-bar-good") == "class:status-bar-good bg:#005f00"
-+    assert sb.track_style("class:status-bar-dim") == "class:status-bar-dim bg:#303030"
++def test_track_style_keeps_the_fill_colour_on_one_grey_track():
++    assert sb.track_style("class:status-bar-good") == "class:status-bar-good bg:#3a3a3a"
++    assert sb.track_style("class:status-bar-critical") == "class:status-bar-critical bg:#3a3a3a"
 +
 +
 +# --- real usage windows -------------------------------------------------------------------------
