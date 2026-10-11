@@ -10,7 +10,7 @@ single window (and, for Hermes, instead of a percentage of a made-up token budge
 You need Node.js 18+:
 
 ```bash
-npx @ktarek/status-line all
+npx @ktarek/status-line@latest all
 ```
 
 `all` installs the statusline for every supported CLI it finds on the device (Claude Code, agy,
